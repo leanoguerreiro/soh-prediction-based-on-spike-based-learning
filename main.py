@@ -1,0 +1,127 @@
+import os
+import pandas as pd
+import numpy as np
+from config.settings import PipelineConfig
+from utils.common import setup_logger, set_seed, apply_post_training_quantization
+from data.ingestion import process_nasa_dataset
+from features.builder import build_sequences
+from evaluation.cross_val import run_cross_validation
+from evaluation.holdout import run_holdout_evaluation
+from visualization.plots import generate_all_plots, plot_loss_curves
+from sklearn.model_selection import GroupShuffleSplit
+
+
+def main():
+    # 1. Inicialização e Configuração
+    config = PipelineConfig()
+    set_seed(config.seed)
+    logger = setup_logger()
+
+    # Criar diretório de relatórios
+    os.makedirs(config.reports_dir, exist_ok=True)
+
+    logger.info("=== INICIANDO PIPELINE DE BATERIAS (SOH) ===")
+    logger.info(f"Device: {config.device} | Epochs: {config.epochs} | K-Folds: {config.k_folds}")
+
+    # 2. Ingestão de Dados e Construção de Features
+    df = process_nasa_dataset(config)
+    X, y, groups = build_sequences(df, config)
+
+    # O COFRE: SEPARAÇÃO GLOBAL DO HOLDOUT
+    logger.info("Separando conjunto Holdout Global (Cofre)...")
+    gss_global = GroupShuffleSplit(n_splits=1, test_size=config.test_size, random_state=config.seed)
+    dev_idx, holdout_idx = next(gss_global.split(X, y, groups))
+
+    X_dev, y_dev, groups_dev = X[dev_idx], y[dev_idx], groups[dev_idx]
+    X_holdout, y_holdout = X[holdout_idx], y[holdout_idx]
+
+    # ==========================================================================
+    # 4A. CROSS-VALIDATION
+    # ==========================================================================
+    logger.info("=== ETAPA: CROSS-VALIDATION ===")
+    cv_results, fold_data, histories_per_fold = run_cross_validation(X_dev, y_dev, groups_dev, config)
+
+    logger.info("=== RESULTADOS GLOBAIS — CROSS-VALIDATION ===")
+    cv_summary_data = []
+    cv_detailed_data = []
+
+    for model_name in cv_results.keys():
+        mae_mean, mae_std = np.mean(cv_results[model_name]['mae']), np.std(cv_results[model_name]['mae'])
+        rmse_mean, rmse_std = np.mean(cv_results[model_name]['rmse']), np.std(cv_results[model_name]['rmse'])
+        r2_mean, r2_std = np.mean(cv_results[model_name]['r2']), np.std(cv_results[model_name]['r2'])
+
+        logger.info(
+            f"{model_name.ljust(25)} | "
+            f"MAE: {mae_mean:.4f} ± {mae_std:.4f} | "
+            f"RMSE: {rmse_mean:.4f} ± {rmse_std:.4f} | "
+            f"R²: {r2_mean:.4f} ± {r2_std:.4f}"
+        )
+
+        # Preparar dados para CSV: Resumo
+        cv_summary_data.append({
+            'Model': model_name,
+            'MAE_Mean': mae_mean, 'MAE_Std': mae_std,
+            'RMSE_Mean': rmse_mean, 'RMSE_Std': rmse_std,
+            'R2_Mean': r2_mean, 'R2_Std': r2_std
+        })
+
+        # Preparar dados para CSV: Detalhado por Fold
+        for fold_idx in range(config.k_folds):
+            cv_detailed_data.append({
+                'Model': model_name,
+                'Fold': fold_idx + 1,
+                'MAE': cv_results[model_name]['mae'][fold_idx],
+                'RMSE': cv_results[model_name]['rmse'][fold_idx],
+                'R2': cv_results[model_name]['r2'][fold_idx]
+            })
+
+    # Guardar CSVs do Cross-Validation
+    pd.DataFrame(cv_summary_data).to_csv(os.path.join(config.reports_dir, 'cv_summary_results.csv'), index=False)
+    pd.DataFrame(cv_detailed_data).to_csv(os.path.join(config.reports_dir, 'cv_detailed_results.csv'), index=False)
+    logger.info("💾 Relatórios CSV do Cross-Validation salvos com sucesso.")
+
+    # ==========================================================================
+    # 4B. HOLDOUT
+    # ==========================================================================
+    logger.info("=== ETAPA: HOLDOUT ===")
+    holdout_results, y_test, X_test_t, holdout_histories = run_holdout_evaluation(
+        X_dev, y_dev, groups_dev, X_holdout, y_holdout, config
+    )
+
+    logger.info("=== RESULTADOS GLOBAIS — HOLDOUT ===")
+    holdout_data = []
+    for model_name, metrics in holdout_results.items():
+        logger.info(
+            f"{model_name.ljust(25)} | "
+            f"MAE: {metrics['mae']:.4f} | "
+            f"RMSE: {metrics['rmse']:.4f} | "
+            f"R²: {metrics['r2']:.4f}"
+        )
+        holdout_data.append({
+            'Model': model_name,
+            'MAE': metrics['mae'],
+            'RMSE': metrics['rmse'],
+            'R2': metrics['r2']
+        })
+
+    # Guardar CSV do Holdout
+    pd.DataFrame(holdout_data).to_csv(os.path.join(config.reports_dir, 'holdout_results.csv'), index=False)
+    logger.info("💾 Relatório CSV do Holdout salvo com sucesso.")
+
+    # ==========================================================================
+    # 5. Quantização e Visualizações
+    # ==========================================================================
+    if 'best_snn' in fold_data:
+        dummy_input = fold_data[1]['X_test_t'][0:1]
+        quantized_snn = apply_post_training_quantization(fold_data['best_snn'], dummy_input)
+
+    logger.info("=== ETAPA: VISUALIZAÇÕES ===")
+    plot_loss_curves(histories_per_fold, fold=None, save_dir=config.plots_cv_dir)
+    plot_loss_curves({1: holdout_histories}, fold=1, save_dir=config.plots_holdout_dir)
+    generate_all_plots(cv_results, fold_data, save_dir=config.plots_cv_dir)
+
+    logger.info("Pipeline executado com sucesso.")
+
+
+if __name__ == "__main__":
+    main()
