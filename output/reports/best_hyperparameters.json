@@ -1,0 +1,8 @@
+{
+    "d_model": 64,
+    "num_heads": 4,
+    "tau": 10.0,
+    "surrogate": "SoftSign",
+    "surrogate_alpha": 6.0,
+    "learning_rate": 0.0006838174674743018
+}
