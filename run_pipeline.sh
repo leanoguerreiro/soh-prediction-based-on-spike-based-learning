@@ -4,7 +4,7 @@
 set -e
 
 # Caminho para o Python do seu ambiente virtual
-PYTHON_BIN="/home/leano/Documentos/MACHINE_LEARNING/soh/.venv/bin/python"
+PYTHON_BIN=".venv/bin/python"
 
 echo "========================================================================"
 echo "🚀 INICIANDO PIPELINE COMPLETO DE BATERIAS (SOH)"
