@@ -173,4 +173,4 @@ if __name__ == "__main__":
     set_seed(config.seed)
 
     # Opcional: Aumentar n_trials para 100 se for rodar de madrugada
-    run_optuna_search(config, n_trials=100)
+    run_optuna_search(config, n_trials=200)
