@@ -1,75 +1,85 @@
+import copy
 import os
 import time
-import torch
+import warnings
+
+import joblib
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import GroupShuffleSplit
-from sklearn.preprocessing import StandardScaler
+import torch
+import torch.nn as nn
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import GroupShuffleSplit, StratifiedGroupKFold
 from spikingjelly.activation_based import functional
+from torchao.quantization import Int8DynamicActivationInt8WeightConfig, quantize_
 
-# Importações do seu ecossistema modular
+warnings.filterwarnings("ignore", category=UserWarning, module="torchao")
+
 from config.settings import PipelineConfig
-from utils.common import setup_logger, set_seed, apply_post_training_quantization
+from utils.common import setup_logger, set_seed
 from data.ingestion import process_nasa_dataset
 from features.builder import build_sequences
 from models.factory import get_model_factory
 
 
+# ==============================================================================
+# UTILITÁRIOS
+# ==============================================================================
+
 def get_model_size_mb(model):
-    """Função auxiliar para obter o tamanho do modelo em MB para o relatório."""
     torch.save(model.state_dict(), "temp_size.p")
     size = os.path.getsize("temp_size.p") / 1e6
     os.remove("temp_size.p")
     return size
 
 
-def get_holdout_test_data(config):
-    """Recria a divisão Holdout exata usando a lógica do Cofre do main.py."""
-    df = process_nasa_dataset(config)
-    X, y, groups = build_sequences(df, config)
-    n_features = X.shape[2]
+def apply_readout_only_quantization(model: nn.Module) -> nn.Module:
+    """
+    Quantiza apenas o readout (fusion/regressor/fc_out) via torchao,
+    mantendo LIFNodes, atenções e projeções em FP32.
+    """
+    model_q = copy.deepcopy(model).to('cpu')
+    model_q.eval()
 
-    # 1. Separação Global (Dev vs Cofre)
-    gss_global = GroupShuffleSplit(n_splits=1, test_size=config.test_size, random_state=config.seed)
-    dev_idx, holdout_idx = next(gss_global.split(X, y, groups))
+    readout_attr = None
+    for candidate in ('fusion', 'regressor', 'fc_out', 'readout'):
+        if hasattr(model_q, candidate):
+            readout_attr = candidate
+            break
 
-    X_dev, y_dev, groups_dev = X[dev_idx], y[dev_idx], groups[dev_idx]
-    X_holdout, y_holdout = X[holdout_idx], y[holdout_idx]
+    if readout_attr is None:
+        raise AttributeError(
+            f"Nenhum readout encontrado em {type(model_q).__name__}. "
+            "Esperado: 'fusion', 'regressor' ou 'fc_out'."
+        )
 
-    # 2. Fit do Scaler apenas no Treino do Dev (exatamente como feito no holdout.py)
-    gss_val = GroupShuffleSplit(n_splits=1, test_size=config.val_size, random_state=config.seed)
-    train_idx, val_idx = next(gss_val.split(X_dev, y_dev, groups_dev))
-    X_train = X_dev[train_idx]
-
-    scaler = StandardScaler()
-    scaler.fit(X_train.reshape(-1, n_features))
-    X_test_s = scaler.transform(X_holdout.reshape(-1, n_features)).reshape(X_holdout.shape)
-
-    # Converte para Tensor (CPU, pois quantização dinâmica foca em Edge/Microcontroladores)
-    X_test_t = torch.tensor(X_test_s, dtype=torch.float32).to('cpu')
-    return X_test_t, y_holdout, n_features
+    quantize_(getattr(model_q, readout_attr), Int8DynamicActivationInt8WeightConfig())
+    return model_q
 
 
-def evaluate_inference(model, X_test_t, y_test):
-    """Avalia o tempo de inferência e as métricas do modelo na CPU."""
+def evaluate_inference(model, X_test_t, y_test, scaler_y=None):
+    """
+    Avalia tempo de inferência e métricas.
+    Se scaler_y for fornecido, des-escala as predições para a escala física.
+    """
     model.eval()
 
-    # Aquecimento (Warm-up) para medição de tempo de CPU justa
     with torch.no_grad():
         _ = model(X_test_t[:5])
         functional.reset_net(model)
 
-    # Medição de Tempo
-    start_time = time.time()
+    start = time.time()
     with torch.no_grad():
         preds = model(X_test_t)
         functional.reset_net(model)
-    end_time = time.time()
+    elapsed = time.time() - start
 
-    inference_time_ms = ((end_time - start_time) / len(y_test)) * 1000
-
+    inference_time_ms = (elapsed / len(y_test)) * 1000
     preds_np = preds.cpu().numpy().flatten()
+
+    if scaler_y is not None:
+        preds_np = scaler_y.inverse_transform(preds_np.reshape(-1, 1)).flatten()
+
     mae = mean_absolute_error(y_test, preds_np)
     rmse = np.sqrt(mean_squared_error(y_test, preds_np))
     r2 = r2_score(y_test, preds_np)
@@ -77,81 +87,299 @@ def evaluate_inference(model, X_test_t, y_test):
     return mae, rmse, r2, inference_time_ms
 
 
+def resolve_best_snn_name(config, models_dict, logger):
+    """Identifica o melhor SNN via holdout_results.csv, com fallback para disco."""
+    csv_path = os.path.join(config.reports_dir, 'holdout_results.csv')
+    if os.path.exists(csv_path):
+        df = pd.read_csv(csv_path)
+        snn_rows = df[df['Model'].str.startswith('SJ-')]
+        if not snn_rows.empty:
+            best = snn_rows.loc[snn_rows['MAE'].idxmin(), 'Model']
+            logger.info(f"Melhor SNN via holdout_results.csv: {best}")
+            return best
+
+    for name in models_dict:
+        if name.startswith("SJ-"):
+            path = os.path.join(config.holdout_models_dir, f"final_model_{name}.pth")
+            if os.path.exists(path):
+                logger.warning(f"CSV não encontrado. Usando primeiro SNN disponível: {name}")
+                return name
+    return None
+
+
+def load_model(model_instance, checkpoint_path, logger):
+    """Carrega checkpoint com tratamento de erro."""
+    if not os.path.exists(checkpoint_path):
+        logger.error(f"Checkpoint não encontrado: {checkpoint_path}")
+        return False
+    model_instance.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
+    model_instance.eval()
+    return True
+
+
+# ==============================================================================
+# DADOS
+# ==============================================================================
+
+def get_holdout_test_data(config):
+    """Recria X_holdout escalonado e carrega os scalers salvos pelo holdout.py."""
+    import json
+    df = process_nasa_dataset(config)
+    X, y, groups = build_sequences(df, config)
+    n_features_orig = X.shape[2]
+
+    # Aplica seleção de features idêntica à do pipeline principal
+    selected_features_path = os.path.join(config.reports_dir, 'selected_features.json')
+    if os.path.exists(selected_features_path):
+        with open(selected_features_path, 'r') as f:
+            sel = json.load(f)
+        X = X[:, :, sel['selected_indices']]
+        config.features = sel['selected_features']
+
+    n_features = X.shape[2]
+
+    gss_global = GroupShuffleSplit(n_splits=1, test_size=config.test_size, random_state=config.seed)
+    _, holdout_idx = next(gss_global.split(X, y, groups))
+    X_holdout, y_holdout = X[holdout_idx], y[holdout_idx]
+
+    scaler_x_path = os.path.join(config.holdout_models_dir, "scaler_x_final.pkl")
+    scaler_y_path = os.path.join(config.holdout_models_dir, "scaler_y_final.pkl")
+
+    if not os.path.exists(scaler_x_path) or not os.path.exists(scaler_y_path):
+        raise FileNotFoundError(
+            f"Scalers não encontrados em {config.holdout_models_dir}. "
+            "Execute main.py antes de quantize.py."
+        )
+
+    scaler_x = joblib.load(scaler_x_path)
+    scaler_y = joblib.load(scaler_y_path)
+
+    X_test_s = scaler_x.transform(X_holdout.reshape(-1, n_features)).reshape(X_holdout.shape)
+    X_test_t = torch.tensor(X_test_s, dtype=torch.float32).to('cpu')
+
+    return X_test_t, y_holdout, n_features, scaler_y
+
+
+def get_fold_test_data(config, X, y, groups, fold_num):
+    """
+    Recria o X_test e scaler_y de um fold específico da Cross-Validation,
+    carregando o scaler_y salvo em disco para garantir consistência.
+    Assume que X já foi filtrado pelas features selecionadas (feito em run_fold_quantization).
+    """
+    n_features = X.shape[2]
+    y_stratum = np.array([config.BATTERY_DOMAINS.get(bid, 'Desconhecido') for bid in groups])
+
+    sgkf = StratifiedGroupKFold(n_splits=config.k_folds, shuffle=True, random_state=config.seed)
+    splits = list(sgkf.split(X, y_stratum, groups))
+
+    train_val_idx, test_idx = splits[fold_num - 1]
+    X_test, y_test = X[test_idx], y[test_idx]
+
+    scaler_y_path = os.path.join(config.models_dir, f"scaler_y_fold{fold_num}.pkl")
+    scaler_x_path = os.path.join(config.models_dir, f"scaler_x_fold{fold_num}.pkl")
+
+    if not os.path.exists(scaler_y_path) or not os.path.exists(scaler_x_path):
+        raise FileNotFoundError(
+            f"Scalers do fold {fold_num} não encontrados. "
+            "Certifique-se de que cross_val.py salva scaler_x_fold{N}.pkl e scaler_y_fold{N}.pkl."
+        )
+
+    scaler_x = joblib.load(scaler_x_path)
+    scaler_y = joblib.load(scaler_y_path)
+
+    X_test_s = scaler_x.transform(X_test.reshape(-1, n_features)).reshape(X_test.shape)
+    X_test_t = torch.tensor(X_test_s, dtype=torch.float32).to('cpu')
+
+    return X_test_t, y_test, scaler_y
+
+
+# ==============================================================================
+# AVALIAÇÃO HOLDOUT
+# ==============================================================================
+
+def run_holdout_quantization(config, logger):
+    """Quantiza o melhor SNN do holdout e gera relatório."""
+    logger.info("=== MODO: HOLDOUT ===")
+
+    X_test_t, y_test, n_features, scaler_y = get_holdout_test_data(config)
+    logger.info(f"Amostras Holdout: {len(y_test)}")
+
+    models_dict = get_model_factory(config, n_features)
+    model_name = resolve_best_snn_name(config, models_dict, logger)
+    if model_name is None:
+        logger.error("Nenhum SNN encontrado. Execute main.py primeiro.")
+        return []
+
+    model_fp32 = models_dict[model_name].to('cpu')
+    ckpt_path = os.path.join(config.holdout_models_dir, f"final_model_{model_name}.pth")
+    if not load_model(model_fp32, ckpt_path, logger):
+        return []
+
+    size_fp32 = get_model_size_mb(model_fp32)
+    logger.info(f"Modelo {model_name} carregado | FP32: {size_fp32:.4f} MB")
+
+    mae_fp32, rmse_fp32, r2_fp32, time_fp32 = evaluate_inference(
+        model_fp32, X_test_t, y_test, scaler_y
+    )
+
+    model_int8 = apply_readout_only_quantization(model_fp32)
+    size_int8 = get_model_size_mb(model_int8)
+
+    mae_int8, rmse_int8, r2_int8, time_int8 = evaluate_inference(
+        model_int8, X_test_t, y_test, scaler_y
+    )
+
+    speedup = time_fp32 / time_int8 if time_int8 > 0 else 0
+    logger.info(
+        f"-> Tamanho  | FP32: {size_fp32:.4f} MB => INT8: {size_int8:.4f} MB ({(1 - size_int8 / size_fp32) * 100:.1f}% redução)")
+    logger.info(f"-> MAE      | FP32: {mae_fp32:.4f} => INT8: {mae_int8:.4f} (Δ {abs(mae_fp32 - mae_int8):.4f})")
+    logger.info(f"-> R²       | FP32: {r2_fp32:.4f} => INT8: {r2_int8:.4f}")
+    logger.info(f"-> Tempo    | FP32: {time_fp32:.2f} ms => INT8: {time_int8:.2f} ms ({speedup:.2f}x)")
+
+    torch.save(model_int8.state_dict(),
+               os.path.join(config.holdout_models_dir, f"quantized_{model_name}.pth"))
+    logger.info(f"💾 Modelo INT8 salvo: quantized_{model_name}.pth")
+
+    return [
+        {'Source': 'holdout', 'Fold': '-', 'Model': model_name,
+         'Format': 'FP32', 'Size_MB': size_fp32, 'MAE': mae_fp32,
+         'RMSE': rmse_fp32, 'R2': r2_fp32, 'Time_ms': time_fp32},
+        {'Source': 'holdout', 'Fold': '-', 'Model': model_name,
+         'Format': 'INT8', 'Size_MB': size_int8, 'MAE': mae_int8,
+         'RMSE': rmse_int8, 'R2': r2_int8, 'Time_ms': time_int8},
+    ]
+
+
+# ==============================================================================
+# AVALIAÇÃO POR FOLD
+# ==============================================================================
+
+def run_fold_quantization(config, logger):
+    """
+    Para cada fold e cada arquitetura SNN, carrega o checkpoint treinado,
+    quantiza o readout e compara FP32 vs INT8 no conjunto de teste daquele fold.
+    """
+    logger.info("=== MODO: CROSS-VALIDATION (por fold) ===")
+
+    import json
+    df_raw = process_nasa_dataset(config)
+    X, y, groups = build_sequences(df_raw, config)
+
+    # Aplica seleção de features idêntica à do pipeline principal
+    selected_features_path = os.path.join(config.reports_dir, 'selected_features.json')
+    if os.path.exists(selected_features_path):
+        with open(selected_features_path, 'r') as f:
+            sel = json.load(f)
+        X = X[:, :, sel['selected_indices']]
+        config.features = sel['selected_features']
+        logger.info(f"Features selecionadas carregadas: {config.features}")
+    else:
+        logger.warning("selected_features.json não encontrado. Usando todas as features.")
+
+    n_features = X.shape[2]
+
+    models_dict = get_model_factory(config, n_features)
+    snn_names = [n for n in models_dict if n.startswith("SJ-")]
+
+    results = []
+
+    for fold_num in range(1, config.k_folds + 1):
+        logger.info(f"--- FOLD {fold_num}/{config.k_folds} ---")
+
+        try:
+            X_test_t, y_test, scaler_y = get_fold_test_data(config, X, y, groups, fold_num)
+        except FileNotFoundError as e:
+            logger.error(str(e))
+            break
+
+        for model_name in snn_names:
+            ckpt_path = os.path.join(config.models_dir, f"{model_name}_fold{fold_num}.pth")
+
+            # Instancia uma cópia limpa da arquitetura
+            model_fp32 = get_model_factory(config, n_features)[model_name].to('cpu')
+            if not load_model(model_fp32, ckpt_path, logger):
+                continue
+
+            size_fp32 = get_model_size_mb(model_fp32)
+            mae_fp32, rmse_fp32, r2_fp32, time_fp32 = evaluate_inference(
+                model_fp32, X_test_t, y_test, scaler_y
+            )
+
+            model_int8 = apply_readout_only_quantization(model_fp32)
+            size_int8 = get_model_size_mb(model_int8)
+            mae_int8, rmse_int8, r2_int8, time_int8 = evaluate_inference(
+                model_int8, X_test_t, y_test, scaler_y
+            )
+
+            speedup = time_fp32 / time_int8 if time_int8 > 0 else 0
+            logger.info(
+                f"   {model_name.ljust(25)} Fold {fold_num} | "
+                f"MAE FP32: {mae_fp32:.4f} => INT8: {mae_int8:.4f} | "
+                f"R² FP32: {r2_fp32:.4f} => INT8: {r2_int8:.4f} | "
+                f"{speedup:.2f}x"
+            )
+
+            # Salva modelo INT8 por fold
+            torch.save(
+                model_int8.state_dict(),
+                os.path.join(config.models_dir, f"quantized_{model_name}_fold{fold_num}.pth")
+            )
+
+            for fmt, vals in [
+                ('FP32', (size_fp32, mae_fp32, rmse_fp32, r2_fp32, time_fp32)),
+                ('INT8', (size_int8, mae_int8, rmse_int8, r2_int8, time_int8)),
+            ]:
+                results.append({
+                    'Source': 'cv', 'Fold': fold_num, 'Model': model_name,
+                    'Format': fmt, 'Size_MB': vals[0], 'MAE': vals[1],
+                    'RMSE': vals[2], 'R2': vals[3], 'Time_ms': vals[4],
+                })
+
+    return results
+
+
+# ==============================================================================
+# MAIN
+# ==============================================================================
+
 def main():
     config = PipelineConfig()
     set_seed(config.seed)
     logger = setup_logger("EdgeQuantization")
     os.makedirs(config.reports_dir, exist_ok=True)
 
-    logger.info("=========================================================")
-    logger.info("=== INICIANDO AVALIAÇÃO DE EDGE AI (PTQ / INT8) ===")
-    logger.info("=========================================================")
+    logger.info("=== INICIANDO AVALIAÇÃO DE EDGE AI (PTQ / INT8 — torchao) ===")
 
-    # 1. Carregar Dados de Teste
-    X_test_t, y_test, n_features = get_holdout_test_data(config)
-    logger.info(f"Dados do Cofre (Holdout) recriados. Amostras: {len(y_test)}")
+    all_results = []
 
-    # 2. Instanciar o Modelo Original (FP32) a partir da Factory!
-    # Isto garante que a arquitetura bate exatamente com o modelo treinado.
-    models_dict = get_model_factory(config, n_features)
-    model_name = "SJ-Spiking-MultiStep"
+    # --- Holdout ---
+    all_results.extend(run_holdout_quantization(config, logger))
 
-    if model_name not in models_dict:
-        logger.error(f"O modelo {model_name} não foi encontrado na factory.")
-        return
+    # --- Cross-Validation por fold ---
+    all_results.extend(run_fold_quantization(config, logger))
 
-    model_fp32 = models_dict[model_name].to('cpu')
+    # --- CSV consolidado ---
+    if all_results:
+        csv_path = os.path.join(config.reports_dir, 'quantization_results.csv')
+        df = pd.DataFrame(all_results)
+        df.to_csv(csv_path, index=False)
+        logger.info(f"💾 CSV consolidado salvo em: {csv_path}")
 
-    model_path = os.path.join(config.holdout_models_dir, f"final_model_{model_name}.pth")
-    if not os.path.exists(model_path):
-        logger.error(f"Modelo não encontrado em {model_path}. Treine o Holdout primeiro.")
-        return
+        # Resumo de estabilidade: média e std da degradação de MAE por modelo
+        logger.info("=== ESTABILIDADE DA QUANTIZAÇÃO POR MODELO (CV) ===")
+        cv_df = df[df['Source'] == 'cv'].copy()
+        if not cv_df.empty:
+            for model_name in cv_df['Model'].unique():
+                fp32 = cv_df[(cv_df['Model'] == model_name) & (cv_df['Format'] == 'FP32')]['MAE']
+                int8 = cv_df[(cv_df['Model'] == model_name) & (cv_df['Format'] == 'INT8')]['MAE']
+                delta = (int8.values - fp32.values)
+                logger.info(
+                    f"   {model_name.ljust(25)} | "
+                    f"ΔMAE médio: {delta.mean():+.4f} ± {delta.std():.4f} | "
+                    f"Speedup médio: {(cv_df[(cv_df['Model'] == model_name) & (cv_df['Format'] == 'FP32')]['Time_ms'].values / cv_df[(cv_df['Model'] == model_name) & (cv_df['Format'] == 'INT8')]['Time_ms'].values).mean():.2f}x"
+                )
 
-    model_fp32.load_state_dict(torch.load(model_path, map_location='cpu'))
-    size_fp32 = get_model_size_mb(model_fp32)
-    logger.info(f"Modelo Float32 (Original) carregado com sucesso. Tamanho: {size_fp32:.4f} MB")
-
-    # 3. Avaliar Modelo Original (FP32)
-    logger.info("Executando inferência Float32...")
-    mae_fp32, rmse_fp32, r2_fp32, time_fp32 = evaluate_inference(model_fp32, X_test_t, y_test)
-
-    # 4. Aplicar Quantização (usando o common.py)
-    dummy_input = X_test_t[:1]
-    model_int8 = apply_post_training_quantization(model_fp32, dummy_input)
-    size_int8 = get_model_size_mb(model_int8)
-
-    # 5. Avaliar Modelo Quantizado (INT8)
-    logger.info("Executando inferência Int8...")
-    mae_int8, rmse_int8, r2_int8, time_int8 = evaluate_inference(model_int8, X_test_t, y_test)
-
-    # 6. Relatório Final de Desempenho
-    speedup = time_fp32 / time_int8 if time_int8 > 0 else 0
-
-    logger.info("=========================================================")
-    logger.info("=== RELATÓRIO DE DEPLOYMENT (BMS / MICROCONTROLADOR) ===")
-    logger.info(
-        f"-> Tamanho na Memória| FP32: {size_fp32:.4f} MB => INT8: {size_int8:.4f} MB ({(1 - size_int8 / size_fp32) * 100:.1f}% Redução)")
-    logger.info(
-        f"-> Precisão (MAE)    | FP32: {mae_fp32:.4f} => INT8: {mae_int8:.4f} (Diferença: {abs(mae_fp32 - mae_int8):.4f})")
-    logger.info(f"-> Explicância (R²)  | FP32: {r2_fp32:.4f} => INT8: {r2_int8:.4f}")
-    logger.info(f"-> Tempo p/ Amostra  | FP32: {time_fp32:.2f} ms => INT8: {time_int8:.2f} ms ({speedup:.2f}x)")
-
-    # 7. Salvar resultados para CSV
-    quant_data = [
-        {'Format': 'FP32 (Original)', 'Size_MB': size_fp32, 'MAE': mae_fp32, 'RMSE': rmse_fp32, 'R2': r2_fp32,
-         'Time_ms': time_fp32},
-        {'Format': 'INT8 (Quantized)', 'Size_MB': size_int8, 'MAE': mae_int8, 'RMSE': rmse_int8, 'R2': r2_int8,
-         'Time_ms': time_int8}
-    ]
-    csv_path = os.path.join(config.reports_dir, 'quantization_results.csv')
-    pd.DataFrame(quant_data).to_csv(csv_path, index=False)
-    logger.info(f"💾 Relatório de Quantização salvo em: {csv_path}")
-
-    # 8. Salvar o modelo quantizado
-    quantized_path = os.path.join(config.holdout_models_dir, f"quantized_{model_name}.pth")
-    torch.save(model_int8.state_dict(), quantized_path)
-    logger.info(f"💾 Modelo Int8 salvo para produção em: {quantized_path}")
-    logger.info("=========================================================")
+    logger.info("=== QUANTIZAÇÃO CONCLUÍDA ===")
 
 
 if __name__ == "__main__":
