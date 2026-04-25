@@ -24,6 +24,7 @@ class PipelineConfig:
     test_size: float = 0.2
     val_size: float = 0.15
     reports_dir: str = "./output/reports"
+    use_synthetic_data: bool = False
 
     # Data parameters
     observation_window_sec: int = 600
@@ -86,6 +87,16 @@ class PipelineConfig:
 
         # Caminho para o ficheiro JSON do Optuna
         best_params_path = os.path.join(self.reports_dir, 'best_hyperparameters.json')
+
+        if self.input_dir == "./input/synthetic_smartphones":
+            self.use_synthetic_data = True
+            self.BATTERY_DOMAINS = {}
+            for i in range(0, 10):
+                self.BATTERY_DOMAINS[str(i)] = 'budget_phone'
+            for i in range(10, 20):
+                self.BATTERY_DOMAINS[str(i)] = 'premium_flagship'
+            for i in range(20, 30):
+                self.BATTERY_DOMAINS[str(i)] = 'gaming_phone'
 
         # Se o ficheiro existir, injeta os valores na configuração
         if os.path.exists(best_params_path):
