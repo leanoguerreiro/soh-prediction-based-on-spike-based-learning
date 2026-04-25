@@ -1,14 +1,17 @@
 import logging
+
 import torch
 import torch.nn as nn
 from spikingjelly.activation_based import functional
 from tqdm import tqdm
+
 from utils.common import add_gaussian_noise
 
 logger = logging.getLogger("BatteryPipeline")
 
+
 def train_standard(model, train_loader, X_val, y_val, X_test, config):
-    criterion = nn.HuberLoss(delta=1.0)
+    criterion = nn.HuberLoss(delta=0.05)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     best_loss, patience_ctr, best_w, best_epoch = float('inf'), 0, None, 0
     history = {'train_loss': [], 'val_loss': []}
@@ -39,10 +42,12 @@ def train_standard(model, train_loader, X_val, y_val, X_test, config):
         else:
             patience_ctr += 1
             if patience_ctr >= config.patience:
-                logger.info(f"      ↳ Early Stopping na época {epoch+1}. Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
+                logger.info(
+                    f"      ↳ Early Stopping na época {epoch + 1}. Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
                 break
     else:
-        logger.info(f"      ↳ Treino concluído ({config.epochs} épocas). Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
+        logger.info(
+            f"      ↳ Treino concluído ({config.epochs} épocas). Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
 
     model.load_state_dict(best_w)
     model.eval()
@@ -51,12 +56,13 @@ def train_standard(model, train_loader, X_val, y_val, X_test, config):
     return preds, history
 
 
-def train_physics(model, train_loader, X_val, y_val, X_test, config, lambda_phys=0.2):
-    criterion_mae = nn.HuberLoss(delta=1.0)
+def train_physics(model, train_loader, X_val, y_val, X_test, config):
+    criterion_mae = nn.HuberLoss(delta=0.05)
     criterion_mse = nn.MSELoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     best_loss, patience_ctr, best_w, best_epoch = float('inf'), 0, None, 0
     history = {'train_loss': [], 'val_loss': []}
+    lambda_phys = config.lambda_phys
 
     epoch_bar = tqdm(range(config.epochs), desc="[Physics] Treinando", leave=False)
     for epoch in epoch_bar:
@@ -85,10 +91,12 @@ def train_physics(model, train_loader, X_val, y_val, X_test, config, lambda_phys
         else:
             patience_ctr += 1
             if patience_ctr >= config.patience:
-                logger.info(f"      ↳ Early Stopping na época {epoch+1}. Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
+                logger.info(
+                    f"      ↳ Early Stopping na época {epoch + 1}. Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
                 break
     else:
-        logger.info(f"      ↳ Treino concluído ({config.epochs} épocas). Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
+        logger.info(
+            f"      ↳ Treino concluído ({config.epochs} épocas). Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
 
     model.load_state_dict(best_w)
     model.eval()
@@ -98,7 +106,7 @@ def train_physics(model, train_loader, X_val, y_val, X_test, config, lambda_phys
 
 
 def train_curriculum(model, train_loader, X_val, y_val, X_test, config):
-    criterion_mae, criterion_mse = nn.HuberLoss(delta=1.0), nn.MSELoss()
+    criterion_mae, criterion_mse = nn.HuberLoss(delta=0.05), nn.MSELoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     best_loss, patience_ctr, best_w, best_epoch = float('inf'), 0, None, 0
     history = {'train_loss': [], 'val_loss': [], 'lambda': []}
@@ -126,17 +134,21 @@ def train_curriculum(model, train_loader, X_val, y_val, X_test, config):
             val_loss = criterion_mae(model(X_val)[0], y_val).item()
         history['val_loss'].append(val_loss)
 
-        epoch_bar.set_postfix(train_loss=f"{train_loss:.4f}", val_loss=f"{val_loss:.4f}", lam=f"{lam:.2f}", patience=patience_ctr)
+        epoch_bar.set_postfix(train_loss=f"{train_loss:.4f}", val_loss=f"{val_loss:.4f}", lam=f"{lam:.2f}",
+                              patience=patience_ctr)
 
         if val_loss < best_loss:
-            best_loss, patience_ctr, best_w, best_epoch = val_loss, 0, {k: v.clone() for k, v in model.state_dict().items()}, epoch + 1
+            best_loss, patience_ctr, best_w, best_epoch = val_loss, 0, {k: v.clone() for k, v in
+                                                                        model.state_dict().items()}, epoch + 1
         else:
             patience_ctr += 1
             if patience_ctr >= config.patience:
-                logger.info(f"      ↳ Early Stopping na época {epoch+1}. Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
+                logger.info(
+                    f"      ↳ Early Stopping na época {epoch + 1}. Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
                 break
     else:
-        logger.info(f"      ↳ Treino concluído ({config.epochs} épocas). Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
+        logger.info(
+            f"      ↳ Treino concluído ({config.epochs} épocas). Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
 
     model.load_state_dict(best_w)
     model.eval()
@@ -146,7 +158,7 @@ def train_curriculum(model, train_loader, X_val, y_val, X_test, config):
 
 
 def train_spikingjelly(model, train_loader, X_val, y_val, X_test, config):
-    criterion = nn.HuberLoss(delta=1.0)
+    criterion = nn.HuberLoss(delta=0.05)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     best_loss, patience_ctr, best_w, best_epoch = float('inf'), 0, None, 0
     history = {'train_loss': [], 'val_loss': []}
@@ -182,10 +194,12 @@ def train_spikingjelly(model, train_loader, X_val, y_val, X_test, config):
         else:
             patience_ctr += 1
             if patience_ctr >= config.patience:
-                logger.info(f"      ↳ Early Stopping na época {epoch+1}. Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
+                logger.info(
+                    f"      ↳ Early Stopping na época {epoch + 1}. Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
                 break
     else:
-        logger.info(f"      ↳ Treino concluído ({config.epochs} épocas). Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
+        logger.info(
+            f"      ↳ Treino concluído ({config.epochs} épocas). Melhor Val Loss: {best_loss:.4f} (Época {best_epoch})")
 
     model.load_state_dict(best_w)
     model.eval()
