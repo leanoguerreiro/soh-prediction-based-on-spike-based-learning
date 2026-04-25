@@ -22,13 +22,22 @@ class PipelineConfig:
     plots_cv_dir: str = "./output/plots/cross_val"
     plots_holdout_dir: str = "./output/plots/holdout"
     test_size: float = 0.2
-    val_size: float = 0.1
+    val_size: float = 0.15
     reports_dir: str = "./output/reports"
 
     # Data parameters
     observation_window_sec: int = 600
     time_steps: int = 50
-    features: tuple = ('Voltage_measured', 'Current_measured', 'Temperature_measured', 'SoC')
+    features: tuple = (
+        'Voltage_measured',
+        'Current_measured',
+        'Temperature_measured',
+        'SoC',
+        'HI_Time_of_Discharge',
+        'HI_Max_Temp',
+        'HI_Voltage_Integral',
+        'HI_Voltage_Drop'
+    )
     excluded_batteries: tuple = ('B0049', 'B0050', 'B0051', 'B0052')
 
     # Training Gerais
@@ -48,9 +57,10 @@ class PipelineConfig:
     tau: float = 2.0
     surrogate: str = 'ATan'
     surrogate_alpha: float = 2.0
-
+    lambda_phys: float = 2.0
     # Validation
     k_folds: int = 4
+    hi_correlation_threshold: float = 0.60
 
     # Estratificação Física
     BATTERY_DOMAINS: dict = field(default_factory=lambda: {
@@ -93,3 +103,21 @@ class PipelineConfig:
                 print(f"⚠️ [PipelineConfig] Erro ao carregar JSON de hiperparâmetros (usando defaults): {e}")
         else:
             print("⚙️ [PipelineConfig] JSON do Optuna não encontrado. A usar hiperparâmetros por defeito.")
+    def save(self, filepath: str):
+        """Serializa o estado atual da config (incluindo features selecionadas) para JSON."""
+        import dataclasses
+        state = {}
+        for f in dataclasses.fields(self):
+            val = getattr(self, f.name)
+            if isinstance(val, torch.device):
+                state[f.name] = str(val)
+            elif isinstance(val, (tuple, list)):
+                state[f.name] = list(val)
+            elif isinstance(val, dict):
+                state[f.name] = val
+            else:
+                state[f.name] = val
+        os.makedirs(os.path.dirname(filepath) or '.', exist_ok=True)
+        with open(filepath, 'w') as fp:
+            json.dump(state, fp, indent=2)
+        print(f"⚙️ [PipelineConfig] Estado salvo em: {filepath}")
