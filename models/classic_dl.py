@@ -121,3 +121,63 @@ class PyTorch_CNN_LSTM(nn.Module):
 
         # 4. Predição
         return self.regressor(last_out)
+
+
+# ---------------------------------------------------------------------------
+# 4. Dilated Causal CNN — WaveNet-style (Padrões locais multi-escala)
+# ---------------------------------------------------------------------------
+class PyTorch_DilatedCNN(nn.Module):
+    """
+    Rede convolucional com dilatação exponencial.
+    Cada camada dobra o dilation_rate, permitindo que o campo receptivo
+    cresça exponencialmente (1, 2, 4, 8...) sem aumentar parâmetros.
+    Ideal para capturar padrões locais em múltiplas escalas de frequência.
+    """
+
+    def __init__(self, time_steps, n_features, d_model=64, n_layers=4):
+        super().__init__()
+
+        # Projeção inicial das features para o espaço d_model
+        self.input_proj = nn.Conv1d(n_features, d_model, kernel_size=1)
+
+        # Stack de convoluções dilatadas com dilation = 2^i
+        # Cada bloco tem sua própria dilatação, BatchNorm e conexão residual
+        self.dilated_layers = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv1d(
+                    in_channels=d_model,
+                    out_channels=d_model,
+                    kernel_size=3,
+                    padding=2 ** i,  # padding = dilation mantém o tamanho temporal
+                    dilation=2 ** i,  # campo receptivo dobra a cada camada
+                ),
+                nn.BatchNorm1d(d_model),
+                nn.GELU(),
+            )
+            for i in range(n_layers)  # dilations: 1, 2, 4, 8
+        ])
+
+        # Fusão multiescala: agrega informação de todas as camadas
+        self.global_pool = nn.AdaptiveAvgPool1d(1)
+
+        self.regressor = nn.Sequential(
+            nn.Linear(d_model, 64),
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, 1)
+        )
+
+    def forward(self, x):
+        # [B, T, F] -> [B, F, T]
+        x = x.permute(0, 2, 1)
+
+        # Projeção inicial
+        x = self.input_proj(x)  # [B, d_model, T]
+
+        # Passa por cada camada dilatada com conexão residual
+        for layer in self.dilated_layers:
+            x = x + layer(x)  # residual: preserva informação de escalas anteriores
+
+        # Pooling global e regressão
+        x = self.global_pool(x).squeeze(-1)  # [B, d_model]
+        return self.regressor(x)
