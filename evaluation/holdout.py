@@ -3,9 +3,10 @@ import torch
 import logging
 import numpy as np
 from sklearn.model_selection import GroupShuffleSplit
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from torch.utils.data import DataLoader, TensorDataset
+import joblib
 
 from models.factory import get_model_factory
 from training.loops import (
@@ -32,25 +33,38 @@ def run_holdout_evaluation(X_dev, y_dev, groups_dev, X_holdout, y_holdout, confi
     # O X_test e y_test agora vêm diretamente do cofre
     X_test, y_test = X_holdout, y_holdout
 
-    # 2. Escalonamento (Fit apenas no Treino)
-    scaler = StandardScaler()
-    X_train_s = scaler.fit_transform(X_train.reshape(-1, n_features)).reshape(X_train.shape)
-    X_val_s = scaler.transform(X_val.reshape(-1, n_features)).reshape(X_val.shape)
-    X_test_s = scaler.transform(X_test.reshape(-1, n_features)).reshape(X_test.shape)
+    # 1. Escalonamento do X (Já estava correto)
+    scaler_x = StandardScaler()
+    X_train_s = scaler_x.fit_transform(X_train.reshape(-1, n_features)).reshape(X_train.shape)
+    X_val_s = scaler_x.transform(X_val.reshape(-1, n_features)).reshape(X_val.shape)
+    X_test_s = scaler_x.transform(X_test.reshape(-1, n_features)).reshape(X_test.shape)
 
-    def to_tensor(arr, tgt):
-        return torch.tensor(arr, dtype=torch.float32).to(config.device), \
-            torch.tensor(tgt, dtype=torch.float32).unsqueeze(1).to(config.device)
+    # 2. Escalonamento do Y (A SOLUÇÃO)
+    scaler_y = MinMaxScaler(feature_range=(0, 1))
+    y_train_s = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
+    y_val_s = scaler_y.transform(y_val.reshape(-1, 1)).flatten()
 
-    X_train_t, y_train_t = to_tensor(X_train_s, y_train)
-    X_val_t, y_val_t = to_tensor(X_val_s, y_val)
-    X_test_t, _ = to_tensor(X_test_s, y_test)
+    # Note que não escalonamos o y_test para as métricas finais, apenas os de treino/validação
+    y_train_t = torch.tensor(y_train_s, dtype=torch.float32).unsqueeze(1).to(config.device)
+    y_val_t = torch.tensor(y_val_s, dtype=torch.float32).unsqueeze(1).to(config.device)
+    X_train_t = torch.tensor(X_train_s, dtype=torch.float32).to(config.device)
+    X_val_t = torch.tensor(X_val_s, dtype=torch.float32).to(config.device)
+    X_test_t = torch.tensor(X_test_s, dtype=torch.float32).to(config.device)
+
+    scaler_x_path = os.path.join(config.holdout_models_dir, "scaler_x_final.pkl")
+    joblib.dump(scaler_x, scaler_x_path)
+    logger.info(f"   💾 Scaler_x salvo em: {scaler_x_path}")
+
+    scaler_y_path = os.path.join(config.holdout_models_dir, "scaler_y_final.pkl")
+    joblib.dump(scaler_y, scaler_y_path)
+    logger.info(f"   💾 Scaler_y salvo em: {scaler_y_path}")
 
     train_loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=config.batch_size, shuffle=True)
     models_dict = get_model_factory(config, n_features)
 
     holdout_results = {}
     holdout_histories = {}  # {model_name: history}
+    holdout_preds = {}
 
     # 4. Loop de Treinamento e Salvamento
     for name, model_instance in models_dict.items():
@@ -67,17 +81,21 @@ def run_holdout_evaluation(X_dev, y_dev, groups_dev, X_holdout, y_holdout, confi
 
         holdout_histories[name] = history
 
-        # Métricas no conjunto de teste inédito
-        mae = mean_absolute_error(y_test, preds)
-        rmse = np.sqrt(mean_squared_error(y_test, preds))
-        r2 = r2_score(y_test, preds)
+        # DES-ESCALONAMENTO: Transformar predição [0, 1] de volta para escala física (ex: 70-100)
+        preds_physical = scaler_y.inverse_transform(preds.reshape(-1, 1)).flatten()
+
+        # Cálculo de métricas sobre valores reais
+        mae = mean_absolute_error(y_test, preds_physical)
+        rmse = np.sqrt(mean_squared_error(y_test, preds_physical))
+        r2 = r2_score(y_test, preds_physical)
 
         holdout_results[name] = {'mae': mae, 'rmse': rmse, 'r2': r2}
-        logger.info(f"   ✓ Final {name.ljust(20)} | Test MAE: {mae:.4f} | RMSE: {rmse:.4f} | R²: {r2:.4f}\n")
+        holdout_histories[name] = history
+        holdout_preds[name] = preds_physical
 
-        # SALVAMENTO FINAL
-        save_path = os.path.join(config.holdout_models_dir, f"final_model_{name}.pth")
-        torch.save(model_instance.state_dict(), save_path)
-        logger.info(f"   💾 Modelo salvo em: {save_path}")
+        logger.info(f"   ✓ {name.ljust(25)} | MAE: {mae:.4f} | R²: {r2:.4f}")
 
-    return holdout_results, y_test, X_test_t, holdout_histories
+        # Salvar checkpoint final
+        torch.save(model_instance.state_dict(), os.path.join(config.holdout_models_dir, f"final_model_{name}.pth"))
+
+    return holdout_results, y_test, X_test_t, holdout_histories, holdout_preds
