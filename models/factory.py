@@ -1,9 +1,10 @@
-from .classic_dl import PyTorch_CNN1D, PyTorch_LSTM, PyTorch_CNN_LSTM
+from spikingjelly.activation_based import surrogate
+
+from .classic_dl import PyTorch_CNN1D, PyTorch_LSTM, PyTorch_CNN_LSTM, PyTorch_DilatedCNN
 from .physics import PyTorch_Phys_iTransformer, PyTorch_Phys_iTransformer_Curriculum
 from .spiking import SJ_Spiking_MultiStep_Attention, SJ_Spiking_Attention, \
-    SJ_Spiking_Hybrid
+    SJ_Spiking_Hybrid, SimpleSNN, SJ_LiquidStateMachine, SJ_Spiking_Dilated
 from .transformers import PyTorch_iTransformer, PyTorch_DynamicGraph_iTR
-from spikingjelly.activation_based import surrogate
 
 
 def get_surrogate_fn(config):
@@ -54,10 +55,37 @@ def get_model_factory(config, n_features):
             tau=config.tau
         ).to(config.device),
 
+        "SJ-Spiking-Simple": SimpleSNN(
+            time_steps=config.time_steps,
+            n_features=n_features,
+            tau=config.tau,
+            hidden_dim=config.d_model,
+
+        ).to(config.device),
+
+        "SJ-LSM": SJ_LiquidStateMachine(
+            time_steps=config.time_steps,
+            n_features=n_features,
+            reservoir_size=getattr(config, 'reservoir_size', 256),
+            sparsity=getattr(config, 'lsm_sparsity', 0.8),
+            spectral_radius=getattr(config, 'spectral_radius', 0.9),
+            tau=config.tau,
+            surrogate_fn=surr_fn
+        ).to(config.device),
+
+        "SJ-Spiking-Dilated": SJ_Spiking_Dilated(
+            time_steps=config.time_steps,
+            n_features=n_features,
+            d_model=config.d_model,
+            tau=config.tau,
+            surrogate_fn=surr_fn
+        ).to(config.device),
+
         # Modelos de Deep Learning Clássico e Transformers
         "CNN-1D": PyTorch_CNN1D(config.time_steps, n_features).to(config.device),
         "LSTM": PyTorch_LSTM(config.time_steps, n_features).to(config.device),
         "CNN-LSTM": PyTorch_CNN_LSTM(config.time_steps, n_features).to(config.device),
+        "CNN-DILATED": PyTorch_DilatedCNN(config.time_steps, n_features).to(config.device),
 
         "iTransformer": PyTorch_iTransformer(
             config.time_steps,
