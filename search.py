@@ -1,31 +1,48 @@
-import os
 import json
-import torch
 import logging
+import os
+
 import optuna
-import numpy as np
+import torch
 from optuna.trial import TrialState
-from sklearn.model_selection import GroupShuffleSplit
-from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error
+from sklearn.model_selection import GroupShuffleSplit
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from torch.utils.data import DataLoader, TensorDataset
 
+from config.settings import PipelineConfig
+from data.ingestion import process_nasa_dataset
+from features.builder import build_sequences
 # Importações do seu pipeline
 from models.spiking import SJ_Spiking_MultiStep_Attention
 from training.loops import train_spikingjelly
 from utils.common import setup_logger, set_seed
-from features.builder import build_sequences
-from data.ingestion import process_nasa_dataset
-from config.settings import PipelineConfig
 
 
 def prepare_data_for_optuna(config):
     """Prepara os dados respeitando o Cofre (Holdout) para evitar Data Leakage."""
+    import json
     logger = logging.getLogger("GridSearch")
     logger.info("Carregando e preparando dados para o Optuna...")
 
     df = process_nasa_dataset(config)
     X, y, groups = build_sequences(df, config)
+
+    # Carrega as features selecionadas pelo pipeline principal (evita inconsistência)
+    selected_features_path = os.path.join(config.reports_dir, 'selected_features.json')
+    if os.path.exists(selected_features_path):
+        with open(selected_features_path, 'r') as f:
+            sel = json.load(f)
+        selected_idx = sel['selected_indices']
+        config.features = sel['selected_features']
+        X = X[:, :, selected_idx]
+        logger.info(f"Features carregadas de {selected_features_path}: {config.features}")
+    else:
+        logger.warning(
+            "selected_features.json não encontrado. Usando todas as features. "
+            "Execute main.py antes para garantir consistência."
+        )
+
     n_features = X.shape[2]
 
     # 1. SEPARAÇÃO GLOBAL (O COFRE) - Idêntico ao main.py para garantir consistência
@@ -41,23 +58,30 @@ def prepare_data_for_optuna(config):
     X_train, y_train = X_dev[train_idx], y_dev[train_idx]
     X_val, y_val = X_dev[val_idx], y_dev[val_idx]
 
-    # 3. Escalonamento
-    scaler = StandardScaler()
-    X_train_s = scaler.fit_transform(X_train.reshape(-1, n_features)).reshape(X_train.shape)
-    X_val_s = scaler.transform(X_val.reshape(-1, n_features)).reshape(X_val.shape)
+    # 3. Escalonamento do X
+    scaler_x = StandardScaler()
+    X_train_s = scaler_x.fit_transform(X_train.reshape(-1, n_features)).reshape(X_train.shape)
+    X_val_s = scaler_x.transform(X_val.reshape(-1, n_features)).reshape(X_val.shape)
 
-    # 4. Conversão para Tensores
+    # 4. Escalonamento do Y (Adicionado!)
+    scaler_y = MinMaxScaler(feature_range=(0, 1))
+    y_train_s = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
+    y_val_s = scaler_y.transform(y_val.reshape(-1, 1)).flatten()
+
+    # 5. Conversão para Tensores (Usando as versões '_s' para o treino)
     X_train_t = torch.tensor(X_train_s, dtype=torch.float32).to(config.device)
-    y_train_t = torch.tensor(y_train, dtype=torch.float32).unsqueeze(1).to(config.device)
+    y_train_t = torch.tensor(y_train_s, dtype=torch.float32).unsqueeze(1).to(config.device)
+
     X_val_t = torch.tensor(X_val_s, dtype=torch.float32).to(config.device)
-    y_val_t = torch.tensor(y_val, dtype=torch.float32).unsqueeze(1).to(config.device)
+    y_val_t = torch.tensor(y_val_s, dtype=torch.float32).unsqueeze(1).to(config.device)
 
     train_loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=config.batch_size, shuffle=True)
 
-    return train_loader, X_val_t, y_val_t, y_val, n_features
+    # Note que agora retornamos o scaler_y no final
+    return train_loader, X_val_t, y_val_t, y_val, n_features, scaler_y
 
 
-def objective(trial, config, train_loader, X_val_t, y_val_t, y_val, n_features):
+def objective(trial, config, train_loader, X_val_t, y_val_t, y_val, n_features, scaler_y):
     """Função objetivo que o Optuna tentará minimizar (MAE)."""
 
     # 1. Hiperparâmetros da Arquitetura
@@ -85,8 +109,8 @@ def objective(trial, config, train_loader, X_val_t, y_val_t, y_val, n_features):
         from spikingjelly.activation_based import surrogate
         surrogate_fn = surrogate.Sigmoid(alpha=surrogate_alpha)
 
-    # Learning Rate
-    config.learning_rate = trial.suggest_float('learning_rate', 1e-4, 5e-3, log=True)
+    # Learning Rate — lido do trial sem mutar o config (efeito colateral entre trials)
+    learning_rate = trial.suggest_float('learning_rate', 1e-4, 5e-3, log=True)
 
     # 3. Instanciação do Modelo
     model = SJ_Spiking_MultiStep_Attention(
@@ -98,13 +122,24 @@ def objective(trial, config, train_loader, X_val_t, y_val_t, y_val, n_features):
         surrogate_fn=surrogate_fn
     ).to(config.device)
 
-    # 4. Treinamento
+    # Config temporária para injetar o lr sem alterar o objeto global
+    import copy as _copy
+    trial_config = _copy.copy(config)
+    trial_config.learning_rate = learning_rate
+
+    # 4. Treinamento — X_val_t passado como test para obter predições de validação
     try:
-        preds, _ = train_spikingjelly(model, train_loader, X_val_t, y_val_t, X_val_t, config)
-        mae = mean_absolute_error(y_val, preds)
+        preds, _ = train_spikingjelly(model, train_loader, X_val_t, y_val_t, X_val_t, trial_config)
+
+        # --- O SEGREDO: DES-ESCALONAR ---
+        # Traz as predições de [0, 1] de volta para a escala física de SoH
+        preds_physical = scaler_y.inverse_transform(preds.reshape(-1, 1)).flatten()
+
+        # O MAE é calculado com a predição na escala real
+        mae = mean_absolute_error(y_val, preds_physical)
+
     except Exception as e:
-        # Se a rede explodir (NaNs) ou der erro de CUDA por hiperparâmetro extremo,
-        # o Optuna simplesmente descarta a tentativa em vez de crashar o código.
+        # Se a rede explodir (NaNs) ou der erro de CUDA por hiperparâmetro extremo
         raise optuna.exceptions.TrialPruned()
 
     return mae
@@ -120,7 +155,7 @@ def run_optuna_search(config, n_trials=50):
     os.makedirs(reports_dir, exist_ok=True)
 
     # Carrega os dados apenas 1x (RESPEITANDO O COFRE)
-    train_loader, X_val_t, y_val_t, y_val, n_features = prepare_data_for_optuna(config)
+    train_loader, X_val_t, y_val_t, y_val, n_features, scaler_y = prepare_data_for_optuna(config)
 
     # Cria o "Study" do Optuna (queremos MINIMIZAR o MAE)
     study = optuna.create_study(
@@ -130,7 +165,7 @@ def run_optuna_search(config, n_trials=50):
     )
 
     # Função lambda para injetar os dados pré-carregados no objective
-    func = lambda trial: objective(trial, config, train_loader, X_val_t, y_val_t, y_val, n_features)
+    func = lambda trial: objective(trial, config, train_loader, X_val_t, y_val_t, y_val, n_features, scaler_y)
 
     # Executa as tentativas
     logger.info(f"Iniciando busca de hiperparâmetros ({n_trials} trials permitidos)...")
@@ -173,4 +208,4 @@ if __name__ == "__main__":
     set_seed(config.seed)
 
     # Opcional: Aumentar n_trials para 100 se for rodar de madrugada
-    run_optuna_search(config, n_trials=200)
+    run_optuna_search(config, n_trials=50)
