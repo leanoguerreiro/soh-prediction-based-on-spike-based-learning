@@ -1,10 +1,10 @@
+import logging
 import os
 import random
-import logging
+
 import numpy as np
 import torch
 import torch.ao.quantization
-import time
 
 
 def setup_logger(name="BatteryPipeline"):
@@ -34,8 +34,14 @@ def set_seed(seed=42):
         torch.backends.cudnn.deterministic = True
 
 
-def add_gaussian_noise(tensor, mean=0.0, std=0.02):
-    return tensor + (torch.randn_like(tensor) * std + mean)
+def add_gaussian_noise(tensor, std):
+    if std == 0:
+        return tensor
+    noise = torch.randn_like(tensor) * std
+
+    noise = torch.clamp(noise, min=-3 * std, max=3 * std)
+
+    return tensor + noise
 
 
 def apply_post_training_quantization(trained_model, dummy_input):
