@@ -15,8 +15,8 @@ def process_nasa_dataset(config):
 
     metadata_path = os.path.join(config.input_dir, "metadata.csv")
 
-    # 1. Leitura do metadata.csv usando Polars
-    metadata = pl.read_csv(metadata_path).with_columns(
+    # 1. Leitura do metadata.csv usando Polars (ignorando os números complexos da impedância)
+    metadata = pl.read_csv(metadata_path, ignore_errors=True).with_columns(
         pl.col('battery_id').cast(pl.Utf8)
     )
 
