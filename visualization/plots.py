@@ -1,36 +1,197 @@
 import os
+from math import pi
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
-from math import pi
 
 # Configurações estéticas para artigos científicos
 plt.style.use('default')
 sns.set_theme(style="whitegrid", palette="muted")
 CORES_MODELOS = {
-    "SJ-Spiking-MultiStep": "#1f77b4",  # Azul
-    "SJ-Spiking-Attention": "#ff7f0e",  # Laranja
-    "SJ-Spiking-Hybrid": "#2ca02c",  # Verde
-    "CNN-1D": "#d62728",  # Vermelho
-    "LSTM": "#9467bd",  # Roxo
-    "CNN-LSTM": "#8c564b",  # Marrom
-    "iTransformer": "#e377c2",  # Rosa
-    "DynamicGraph-iTR": "#7f7f7f",  # Cinza
-    "Phys-iTR-Curriculum": "#bcbd22",  # Verde-oliva
-    "Phys-iTransformer": "#17becf",  # Ciano
-    "SoH Real": "black"
+    # Família SJ-Spiking — tons de azul/ciano
+    "SJ-Spiking-MultiStep": "#1f77b4",  # Azul principal
+    "SJ-Spiking-Attention": "#4fc3f7",  # Azul claro
+    "SJ-Spiking-Hybrid": "#0077b6",  # Azul escuro
+    "SJ-Spiking-Simple": "#90e0ef",  # Azul bem claro
+    'SJ-LSM': "#00b4d8",  # Ciano
+    'SJ-Spiking-Dilated': "#48cae4",  # Azul vibrante
+
+    # Família CNN/LSTM — tons de laranja/vermelho
+    "CNN-1D": "#e85d04",  # Laranja escuro
+    "LSTM": "#f48c06",  # Âmbar
+    "CNN-LSTM": "#dc2f02",  # Vermelho-laranja
+    "CNN-DILATED": "#ffba08",  # Amarelo vibrante
+
+    # Família iTransformer — tons de roxo/rosa
+    "iTransformer": "#7b2d8b",  # Roxo
+    "DynamicGraph-iTR": "#c77dff",  # Lilás
+    "Phys-iTR-Curriculum": "#e040fb",  # Rosa vibrante
+    "Phys-iTransformer": "#f48fb1",  # Rosa claro
+
+    # Referência
+    "SoH Real": "#212121",  # Preto suave
 }
 
 
-def plot_loss_curves(histories_per_fold, fold=None, save_dir="./output/plots"):
-    """Gera as curvas de treino e validação (uma imagem por modelo)"""
+def plot_scatter_real_vs_pred(y_test, holdout_preds, save_dir):
+    """
+    Gráfico de Dispersão (Real vs Previsto) - Foco nos 4 principais modelos.
+    """
     os.makedirs(save_dir, exist_ok=True)
-    folds_to_plot = [fold] if fold is not None else histories_per_fold.keys()
+    sns.set_theme(style="whitegrid")
 
-    for f in folds_to_plot:
-        histories = histories_per_fold[f]
+    models_to_plot = [
+        "SJ-Spiking-MultiStep",
+        "SJ-Spiking-Attention",
+        "SJ-Spiking-Hybrid",
+        "SJ-Spiking-Simple",
+        "SJ-LSM",
+        "SJ-Spiking-Dilated",
+        "CNN-1D",
+        "LSTM",
+        "CNN-LSTM",
+        "CNN-DILATED",
+        "iTransformer",
+        "DynamicGraph-iTR",
+        "Phys-iTR-Curriculum",
+        "Phys-iTransformer"
 
+    ]
+    models_to_plot = [m for m in models_to_plot if m in holdout_preds]
+
+    # Gráfico combinado (grid dinâmico)
+    n = len(models_to_plot)
+    ncols = min(3, n)
+    nrows = (n + ncols - 1) // ncols
+    plt.figure(figsize=(6 * ncols, 5 * nrows))
+    for i, model_name in enumerate(models_to_plot, 1):
+        plt.subplot(nrows, ncols, i)
+        preds = holdout_preds[model_name]
+
+        min_val = min(np.min(y_test), np.min(preds)) - 2
+        max_val = max(np.max(y_test), np.max(preds)) + 2
+
+        plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal', alpha=0.7)
+        plt.scatter(y_test, preds, alpha=0.6, edgecolors='w', s=60, color='#1f77b4')
+
+        plt.title(f"{model_name}", fontsize=14, fontweight='bold')
+        plt.xlabel("SoH Real (%)")
+        plt.ylabel("SoH Previsto (%)")
+        plt.legend()
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "holdout_scatter_real_vs_pred.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Gráfico individual por modelo
+    for model_name in models_to_plot:
+        preds = holdout_preds[model_name]
+
+        min_val = min(np.min(y_test), np.min(preds)) - 2
+        max_val = max(np.max(y_test), np.max(preds)) + 2
+
+        plt.figure(figsize=(6, 6))
+        plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal', alpha=0.7)
+        plt.scatter(y_test, preds, alpha=0.6, edgecolors='w', s=60, color='#1f77b4')
+
+        plt.title(f"{model_name}", fontsize=14, fontweight='bold')
+        plt.xlabel("SoH Real (%)")
+        plt.ylabel("SoH Previsto (%)")
+        plt.legend()
+        plt.tight_layout()
+
+        safe_name = model_name.replace("/", "_").replace(" ", "_")
+        plt.savefig(os.path.join(save_dir, f"holdout_scatter_{safe_name}.png"), dpi=300, bbox_inches='tight')
+        plt.close()
+
+    print(f"📊 Scatter salvo em {save_dir}")
+
+
+def plot_residual_distribution(y_test, holdout_preds, save_dir):
+    """
+    Distribuição dos Erros Residuais por modelo (violin plot).
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    sns.set_theme(style="whitegrid")
+
+    error_data = []
+    for model_name, preds in holdout_preds.items():
+        residuals = preds - y_test
+        for res in residuals:
+            error_data.append({'Model': model_name, 'Erro (Previsto - Real)': res})
+
+    df_errors = pd.DataFrame(error_data)
+
+    # Gráfico combinado
+    plt.figure(figsize=(14, 6))
+    sns.violinplot(data=df_errors, x='Model', y='Erro (Previsto - Real)', hue='Model', inner='quartile',
+                   palette='muted', legend=False)
+    plt.axhline(0, color='r', linestyle='--', linewidth=1.5)
+    plt.title("Distribuição do Erro Residual no Holdout", fontsize=16, fontweight='bold')
+    plt.ylabel("Erro Absoluto (SoH %)")
+    plt.xlabel("")
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "holdout_residual_distribution.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Gráfico individual por modelo
+    for model_name in holdout_preds.keys():
+        df_model = df_errors[df_errors['Model'] == model_name]
+
+        plt.figure(figsize=(6, 6))
+        df_model = df_model.copy()
+        df_model['_grp'] = model_name
+        sns.violinplot(data=df_model, y='Erro (Previsto - Real)', hue='_grp',
+                       inner='quartile', palette='muted', legend=False)
+        plt.axhline(0, color='r', linestyle='--', linewidth=1.5)
+        plt.title(f"Erro Residual — {model_name}", fontsize=14, fontweight='bold')
+        plt.ylabel("Erro (Previsto - Real) (SoH %)")
+        plt.tight_layout()
+
+        safe_name = model_name.replace("/", "_").replace(" ", "_")
+        plt.savefig(os.path.join(save_dir, f"holdout_residual_{safe_name}.png"), dpi=300, bbox_inches='tight')
+        plt.close()
+
+    print(f"📊 Violin plot salvo em {save_dir}")
+
+
+def generate_holdout_plots(y_test, holdout_preds, save_dir):
+    """
+    Gera todos os gráficos de avaliação do Holdout.
+    """
+    plot_scatter_real_vs_pred(y_test, holdout_preds, save_dir)
+    plot_residual_distribution(y_test, holdout_preds, save_dir)
+    print(f"📈 Todos os gráficos do Holdout salvos em {save_dir}")
+
+
+def plot_loss_curves(histories_per_fold, fold=None, save_dir="./output/plots"):
+    """Gera as curvas de treino e validação (uma imagem por modelo).
+
+    Aceita dois formatos de `histories_per_fold`:
+      - CV:      {fold_num: {model_name: history_dict}, ...}
+      - Holdout: {model_name: history_dict}   (fold=None ou fold=1)
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Detecta se o dict é {fold -> {name -> hist}} ou {name -> hist} diretamente
+    first_val = next(iter(histories_per_fold.values()))
+    is_nested = isinstance(first_val, dict) and any(
+        isinstance(v, dict) and 'train_loss' in v for v in first_val.values()
+    )
+
+    if is_nested:
+        # Formato CV padrão
+        folds_to_plot = [fold] if fold is not None else list(histories_per_fold.keys())
+        iter_items = [(f, histories_per_fold[f]) for f in folds_to_plot]
+    else:
+        # Formato holdout: {name: hist} — envolve num fold fictício
+        fold_label = fold if fold is not None else 1
+        iter_items = [(fold_label, histories_per_fold)]
+
+    for f, histories in iter_items:
         for name, hist in histories.items():
             plt.figure(figsize=(8, 5))
             epochs = range(1, len(hist['train_loss']) + 1)
@@ -41,16 +202,16 @@ def plot_loss_curves(histories_per_fold, fold=None, save_dir="./output/plots"):
                 plt.plot(epochs, hist['val_loss'], label='Val Loss', color=CORES_MODELOS.get(name, 'blue'),
                          linestyle='--')
 
-            fold_str = f"Fold {f}" if fold else "Todos os Folds"
+            fold_str = f"Fold {f}"
             plt.title(f"Curva de Loss: {name} - {fold_str}", fontweight='bold')
             plt.xlabel("Épocas")
             plt.ylabel("Huber Loss")
             plt.legend()
             plt.grid(True, alpha=0.3)
 
-            suffix = f"fold_{f}" if fold else "all"
+            safe_name = name.replace("/", "_").replace(" ", "_")
             plt.tight_layout()
-            plt.savefig(os.path.join(save_dir, f"loss_{name}_{suffix}.png"), dpi=300, bbox_inches='tight')
+            plt.savefig(os.path.join(save_dir, f"loss_{safe_name}_fold{f}.png"), dpi=300, bbox_inches='tight')
             plt.close()
 
 
@@ -112,9 +273,13 @@ def _plot_metricas_medias(cv_results, save_dir):
     rmse_means = [np.mean(cv_results[m]['rmse']) for m in models]
     r2_means = [np.mean(cv_results[m]['r2']) for m in models]
 
+    df_mae = pd.DataFrame({'Modelo': models, 'MAE': mae_means})
+    df_rmse = pd.DataFrame({'Modelo': models, 'RMSE': rmse_means})
+    df_r2 = pd.DataFrame({'Modelo': models, 'R2': r2_means})
+
     # 01a - MAE
     plt.figure(figsize=(10, 6))
-    sns.barplot(x=models, y=mae_means, palette=paleta)
+    sns.barplot(data=df_mae, x='Modelo', y='MAE', hue='Modelo', palette=paleta, legend=False)
     plt.title('Comparação de MAE Médio (Menor é Melhor)', fontweight='bold')
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
@@ -123,7 +288,7 @@ def _plot_metricas_medias(cv_results, save_dir):
 
     # 01b - RMSE
     plt.figure(figsize=(10, 6))
-    sns.barplot(x=models, y=rmse_means, palette=paleta)
+    sns.barplot(data=df_rmse, x='Modelo', y='RMSE', hue='Modelo', palette=paleta, legend=False)
     plt.title('Comparação de RMSE Médio (Menor é Melhor)', fontweight='bold')
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
@@ -132,7 +297,7 @@ def _plot_metricas_medias(cv_results, save_dir):
 
     # 01c - R2
     plt.figure(figsize=(10, 6))
-    sns.barplot(x=models, y=r2_means, palette=paleta)
+    sns.barplot(data=df_r2, x='Modelo', y='R2', hue='Modelo', palette=paleta, legend=False)
     plt.title('Comparação de R² Médio (Maior é Melhor)', fontweight='bold')
     plt.xticks(rotation=45, ha='right')
     plt.ylim(0, 1.1)
@@ -214,7 +379,7 @@ def _plot_boxplot_mae(df_metrics, save_dir):
     plt.figure(figsize=(10, 8))
     paleta = [CORES_MODELOS.get(m, 'gray') for m in df_metrics['Modelo'].unique()]
 
-    sns.boxplot(data=df_metrics, x='MAE', y='Modelo', palette=paleta, showmeans=True,
+    sns.boxplot(data=df_metrics, x='MAE', y='Modelo', hue='Modelo', palette=paleta, legend=False, showmeans=True,
                 meanprops={"marker": "o", "markerfacecolor": "white", "markeredgecolor": "black", "markersize": 8})
     sns.stripplot(data=df_metrics, x='MAE', y='Modelo', color='black', alpha=0.5, size=6)
 
