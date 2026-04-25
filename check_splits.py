@@ -3,9 +3,9 @@ from sklearn.model_selection import GroupShuffleSplit, StratifiedGroupKFold
 
 # Importações do seu projeto
 from config.settings import PipelineConfig
-from utils.common import set_seed
 from data.ingestion import process_nasa_dataset
 from features.builder import build_sequences
+from utils.common import set_seed
 
 
 def format_bats(baterias, config):
@@ -41,7 +41,6 @@ def main():
     groups_dev = groups[dev_idx]
     groups_holdout = groups[holdout_idx]
 
-    baterias_dev = np.unique(groups_dev)
     baterias_holdout = np.unique(groups_holdout)
 
     print("\n" + "=" * 80)
@@ -86,7 +85,7 @@ def main():
         fold_tv_groups = groups_dev[cv_train_val_idx]
 
         # O Cross-Val faz um split interno para Validação (usando test_size=0.2 fixo)
-        gss_cv_val = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=config.seed)
+        gss_cv_val = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=config.seed + fold)
         dummy_X = np.zeros((len(fold_tv_groups), 1))
         cv_t_idx, cv_v_idx = next(gss_cv_val.split(dummy_X, dummy_X, fold_tv_groups))
 
@@ -97,7 +96,6 @@ def main():
         print(f"      {format_bats(baterias_fold_test, config)}\n")
         print(f"   ► Validação ({len(baterias_fold_val)} baterias):")
         print(f"      {format_bats(baterias_fold_val, config)}\n")
-        # O treino tem muitas baterias, podemos imprimir de forma mais compacta se preferir, mas formatado fica excelente para auditoria
         print(f"   ► Treino ({len(baterias_fold_train)} baterias):")
         print(f"      {format_bats(baterias_fold_train, config)}")
 
