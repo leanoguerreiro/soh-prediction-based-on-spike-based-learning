@@ -648,7 +648,6 @@ class SJ_Spiking_Dilated(nn.Module):
         ])
 
         # Um LIF por camada dilatada — parâmetros tau independentes
-        # step_mode='m': recebe [T, B*d_model] e processa todo o tempo de uma vez
         self.lif_layers = nn.ModuleList([
             neuron.LIFNode(
                 tau=tau,
