@@ -1,4 +1,5 @@
 import os
+import polars as pl
 import pandas as pd
 import numpy as np
 from scipy.interpolate import interp1d
@@ -9,58 +10,84 @@ logger = logging.getLogger("BatteryPipeline")
 
 
 def process_nasa_dataset(config):
-    logger.info("Iniciando ingestão e processamento do Dataset NASA...")
+    logger.info("Iniciando ingestão e processamento do Dataset NASA com Polars...")
     os.makedirs(config.output_dir, exist_ok=True)
 
     metadata_path = os.path.join(config.input_dir, "metadata.csv")
-    metadata = pd.read_csv(metadata_path)
-    metadata['battery_id'] = metadata['battery_id'].astype(str)
 
-    discharge_metadata = metadata[
-        (metadata['type'] == 'discharge') &
-        (~metadata['battery_id'].isin(config.excluded_batteries))
-    ].copy()
-    discharge_metadata['cycle_number'] = discharge_metadata.groupby('battery_id').cumcount() + 1
+    # 1. Leitura do metadata.csv usando Polars
+    metadata = pl.read_csv(metadata_path).with_columns(
+        pl.col('battery_id').cast(pl.Utf8)
+    )
+
+    # 2. Filtragem e cálculo do 'cycle_number' de forma vetorial
+    discharge_metadata = metadata.filter(
+        (pl.col('type') == 'discharge') &
+        (~pl.col('battery_id').is_in(config.excluded_batteries))
+    ).with_columns(
+        # Cria uma contagem cumulativa começando em 1 para cada grupo de battery_id
+        pl.int_range(1, pl.len() + 1).over('battery_id').alias('cycle_number')
+    )
 
     processed_dfs = []
     missing_files = set()
 
-    for _, row in tqdm(discharge_metadata.iterrows(), total=len(discharge_metadata), desc="Processando Ciclos"):
+    # iter_rows(named=True) devolve um dicionário para cada linha, super rápido
+    for row in tqdm(discharge_metadata.iter_rows(named=True), total=discharge_metadata.height,
+                    desc="Processando Ciclos"):
         file_path = os.path.join(config.input_dir, "data", row['filename'])
         if not os.path.exists(file_path):
             missing_files.add(row['battery_id'])
             continue
 
-        df = pd.read_csv(file_path).copy()
-        cutoff_idx = df[df['Voltage_measured'] < 2.7].index.min()
-        truncated_df = df if pd.isna(cutoff_idx) else df.iloc[:cutoff_idx].copy()
+        # Leitura ultra-rápida do CSV do ciclo
+        df = pl.read_csv(file_path)
 
-        truncated_df['Time_diff_hr'] = truncated_df['Time'].diff().fillna(0) / 3600
-        truncated_df['Delta_Q'] = truncated_df['Current_measured'] * truncated_df['Time_diff_hr']
-        capacity = abs(truncated_df['Delta_Q'].sum())
+        # 3. Cutoff - Cortar o DataFrame quando a voltagem cai abaixo de 2.7V
+        cutoff_mask = df["Voltage_measured"] < 2.7
+        if cutoff_mask.any():
+            cutoff_idx = cutoff_mask.arg_true()[0]  # Pega no primeiro índice verdadeiro
+            df = df.slice(0, cutoff_idx)
+
+        # 4. Cálculo da Capacidade (Delta_Q e Time_diff) em Rust (motor Polars)
+        df = df.with_columns(
+            (pl.col('Time').diff().fill_null(0) / 3600).alias('Time_diff_hr')
+        ).with_columns(
+            (pl.col('Current_measured') * pl.col('Time_diff_hr')).alias('Delta_Q')
+        )
+
+        capacity = abs(df["Delta_Q"].sum())
 
         if capacity > 1.4:
-            truncated_df['SoC'] = 100 * (1 + truncated_df['Delta_Q'].cumsum() / capacity)
+            # Cálculo vetorial do SoC
+            df = df.with_columns(
+                (100 * (1 + pl.col('Delta_Q').cum_sum() / capacity)).alias('SoC')
+            )
             soh_value = (capacity / 2.0) * 100
 
-            start_time = truncated_df['Time'].iloc[0]
+            # 5. Filtragem da Janela de Observação (Coach B)
+            start_time = df["Time"][0]
             end_time_coach_b = start_time + config.observation_window_sec
-            coach_b_df = truncated_df[truncated_df['Time'] <= end_time_coach_b].copy()
 
-            if coach_b_df.empty or len(coach_b_df) < 5:
+            coach_b_df = df.filter(pl.col('Time') <= end_time_coach_b)
+
+            if coach_b_df.height < 5:
                 continue
 
+            # Extração para Numpy (Zero-Copy) para acelerar cálculos do Numpy/Scipy
+            time_arr = coach_b_df["Time"].to_numpy()
+            volt_arr = coach_b_df["Voltage_measured"].to_numpy()
+            temp_arr = coach_b_df["Temperature_measured"].to_numpy()
+
             # =====================================================================
-            # CÁLCULO DOS HEALTH INDICATORS (HIs) APENAS NA JANELA DE OBSERVAÇÃO
-            # Corrigido: HIs calculados sobre coach_b_df (janela de 600s),
-            # não sobre o ciclo completo — evita leakage de informação futura.
+            # CÁLCULO DOS HEALTH INDICATORS (HIs)
             # =====================================================================
             _trapz = np.trapezoid if hasattr(np, 'trapezoid') else np.trapz
             hi_values = {
-                'HI_Time_of_Discharge': coach_b_df['Time'].iloc[-1] - coach_b_df['Time'].iloc[0],
-                'HI_Max_Temp':          coach_b_df['Temperature_measured'].max(),
-                'HI_Voltage_Integral':  _trapz(coach_b_df['Voltage_measured'], coach_b_df['Time']),
-                'HI_Voltage_Drop':      coach_b_df['Voltage_measured'].max() - coach_b_df['Voltage_measured'].min()
+                'HI_Time_of_Discharge': time_arr[-1] - time_arr[0],
+                'HI_Max_Temp': temp_arr.max(),
+                'HI_Voltage_Integral': _trapz(volt_arr, time_arr),
+                'HI_Voltage_Drop': volt_arr.max() - volt_arr.min()
             }
             # =====================================================================
 
@@ -71,32 +98,39 @@ def process_nasa_dataset(config):
                 'SoH': [soh_value] * config.time_steps,
             }
 
-            # Lógica de Preenchimento Inteligente (Interpolação vs Repetição)
+            # Lógica de Interpolação vs Repetição
             for feat in config.features:
                 if feat.startswith('HI_'):
-                    # Pega o valor calculado lá em cima e repete 'time_steps' vezes
                     val = hi_values.get(feat, 0.0)
                     interpolated_cycle[feat] = [val] * config.time_steps
                 else:
-                    # Séries temporais nativas passam pela interpolação
-                    f_interp = interp1d(coach_b_df['Time'], coach_b_df[feat], kind='linear', fill_value='extrapolate')
+                    feat_arr = coach_b_df[feat].to_numpy()
+                    f_interp = interp1d(time_arr, feat_arr, kind='linear', fill_value='extrapolate')
                     interpolated_cycle[feat] = f_interp(uniform_time_axis)
 
-            processed_dfs.append(pd.DataFrame(interpolated_cycle))
+            # Usamos o Polars para construir o pequeno DF interpolado
+            processed_dfs.append(pl.DataFrame(interpolated_cycle))
 
-    full_dataset = pd.concat(processed_dfs)
+    # 6. Concatenação de todos os DataFrames interpolados num piscar de olhos
+    full_dataset_pl = pl.concat(processed_dfs)
 
-    # Avisa sobre baterias mapeadas em BATTERY_DOMAINS mas ausentes nos ficheiros de dados
+    # Logs de auditoria originais
     if missing_files:
         logger.warning(f"⚠️ Ficheiros não encontrados para {len(missing_files)} baterias: {sorted(missing_files)}")
-    mapped_not_processed = set(config.BATTERY_DOMAINS.keys()) - set(np.unique(full_dataset['battery_id']))
+
+    unique_batteries = full_dataset_pl["battery_id"].unique().to_list()
+    mapped_not_processed = set(config.BATTERY_DOMAINS.keys()) - set(unique_batteries)
+
     if mapped_not_processed:
         logger.warning(
             f"⚠️ Baterias definidas em BATTERY_DOMAINS mas ausentes do dataset processado "
             f"(verifique ficheiros ou excluded_batteries): {sorted(mapped_not_processed)}"
         )
+
     csv_data_path = os.path.join(config.output_dir, 'battery_health_dataset.csv')
-    full_dataset.to_csv(csv_data_path, index=False)
+    full_dataset_pl.write_csv(csv_data_path)
     logger.info(f"Dataset salvo em {csv_data_path}")
 
-    return full_dataset
+    # CONVERSÃO PARA PANDAS NO FINAL
+    # Retornamos como Pandas para garantir compatibilidade a 100% com o builder.py
+    return full_dataset_pl
