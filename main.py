@@ -7,6 +7,7 @@ from sklearn.model_selection import GroupShuffleSplit
 
 from config.settings import PipelineConfig
 from data.ingestion import process_nasa_dataset
+from data.ingestion_synthetic import process_synthetic_dataset
 from evaluation.cross_val import run_cross_validation
 from evaluation.holdout import run_holdout_evaluation
 from features.builder import build_sequences
@@ -17,7 +18,7 @@ from visualization.plots import generate_all_plots, plot_loss_curves, generate_h
 
 def main():
     # 1. Inicialização e Configuração
-    config = PipelineConfig()
+    config = PipelineConfig(input_dir='./input/synthetic_smartphones')
     set_seed(config.seed)
     logger = setup_logger()
 
@@ -28,7 +29,12 @@ def main():
     logger.info(f"Device: {config.device} | Epochs: {config.epochs} | K-Folds: {config.k_folds}")
 
     # 2. Ingestão de Dados e Construção de Features
-    df = process_nasa_dataset(config)
+    if config.use_synthetic_data:
+        logger.info("Carregando dados sintéticos...")
+        df = process_synthetic_dataset(config)
+    else:
+        logger.info("Carregando dados reais (NASA)...")
+        df = process_nasa_dataset(config)
     X, y, groups = build_sequences(df, config)
 
     # O COFRE: SEPARAÇÃO GLOBAL DO HOLDOUT
