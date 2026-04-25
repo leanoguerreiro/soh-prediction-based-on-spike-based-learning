@@ -38,7 +38,7 @@ class PyTorch_Phys_iTransformer_Curriculum(nn.Module):
     ao longo de `warmup_epochs`. A época atual é injetada via set_epoch().
     """
 
-    def __init__(self, time_steps, n_features, d_model=64, lambda_start=0.0, lambda_max=0.3, warmup_epochs=50):
+    def __init__(self, time_steps, n_features, d_model=64, lambda_start=0.0, lambda_max=2.0, warmup_epochs=50):
         super().__init__()
         self.base_model = PyTorch_iTransformer(time_steps, n_features, d_model)
         self.phys_head = nn.Sequential(
