@@ -2,7 +2,9 @@
 
 ## Visão geral
 
-Este repositório implementa um pipeline experimental para estimar o **State of Health (SoH)** de baterias de íons de lítio a partir de ciclos de descarga do dataset da NASA. O projeto compara, sob um protocolo único de pré-processamento e avaliação, quatro famílias de modelos:
+Este repositório implementa um pipeline experimental para estimar o **State of Health (SoH)** de baterias de íons de
+lítio a partir de ciclos de descarga do dataset da NASA. O projeto compara, sob um protocolo único de pré-processamento
+e avaliação, quatro famílias de modelos:
 
 - redes neurais profundas clássicas;
 - Transformers e variantes híbridas;
@@ -28,33 +30,37 @@ O fluxo atual do projeto cobre:
 O pipeline modular é organizado em camadas:
 
 1. **Configuração central** em `config/settings.py`
-   - Define caminhos, hiperparâmetros padrão, device, sementes, janelas temporais e o mapeamento `battery_id -> domínio físico`.
-   - Carrega automaticamente `output/reports/best_hyperparameters.json` quando ele existe.
+    - Define caminhos, hiperparâmetros padrão, device, sementes, janelas temporais e o mapeamento
+      `battery_id -> domínio físico`.
+    - Carrega automaticamente `output/reports/best_hyperparameters.json` quando ele existe.
 
 2. **Ingestão de dados** em `data/`
-   - `ingestion.py` processa o dataset real da NASA.
+    - `ingestion.py` processa o dataset real da NASA.
 
 3. **Construção e seleção de features** em `features/`
-   - `builder.py` monta tensores tridimensionais `[amostras, tempo, features]`.
-   - `selection.py` calcula correlação de Spearman entre features e SoH e remove variáveis pouco informativas, preservando sensores físicos base.
+    - `builder.py` monta tensores tridimensionais `[amostras, tempo, features]`.
+    - `selection.py` calcula correlação de Spearman entre features e SoH e remove variáveis pouco informativas,
+      preservando sensores físicos base.
 
 4. **Modelos** em `models/`
-   - Implementações PyTorch para CNNs, LSTM, híbridos CNN-LSTM, Transformers, variantes físicas e SNNs.
-   - `factory.py` instancia todas as arquiteturas com base no `PipelineConfig`.
+    - Implementações PyTorch para CNNs, LSTM, híbridos CNN-LSTM, Transformers, variantes físicas e SNNs.
+    - `factory.py` instancia todas as arquiteturas com base no `PipelineConfig`.
 
 5. **Treinamento** em `training/loops.py`
-   - Loops específicos para modelos padrão, físicos, curriculum learning e SNNs.
-   - Early stopping com `HuberLoss`, `AdamW`, ruído gaussiano de regularização e reset explícito dos estados de rede spiking.
+    - Loops específicos para modelos padrão, físicos, curriculum learning e SNNs.
+    - Early stopping com `HuberLoss`, `AdamW`, ruído gaussiano de regularização e reset explícito dos estados de rede
+      spiking.
 
 6. **Avaliação** em `evaluation/`
-   - `cross_val.py` executa `StratifiedGroupKFold` com estratificação por domínio físico.
-   - `holdout.py` executa o treino final e testa no cofre de holdout.
+    - `cross_val.py` executa `StratifiedGroupKFold` com estratificação por domínio físico.
+    - `holdout.py` executa o treino final e testa no cofre de holdout.
 
 7. **Visualização** em `visualization/plots.py`
-   - Gera curvas de loss, gráficos de comparação por fold, CED, scatter real vs. previsto, histogramas, radar chart e análises temporais.
+    - Gera curvas de loss, gráficos de comparação por fold, CED, scatter real vs. previsto, histogramas, radar chart e
+      análises temporais.
 
 8. **Scripts auxiliares** na raiz
-   - `main.py`, `search.py`, `ood_val.py`, `quantize.py`, `check_splits.py`, `run_pipeline.sh`.
+    - `main.py`, `search.py`, `ood_val.py`, `quantize.py`, `check_splits.py`, `run_pipeline.sh`.
 
 ---
 
@@ -163,12 +169,12 @@ O processamento atual faz o seguinte:
 - calcula `SoH` com capacidade nominal fixa de 2.0 Ah;
 - deriva `SoC`;
 - extrai health indicators estáticos:
-  - `HI_Time_of_Discharge`
-  - `HI_Max_Temp`
-  - `HI_Temp_Delta`
-  - `HI_Mean_Temp`
-  - `HI_Voltage_Integral`
-  - `HI_Voltage_Drop`
+    - `HI_Time_of_Discharge`
+    - `HI_Max_Temp`
+    - `HI_Temp_Delta`
+    - `HI_Mean_Temp`
+    - `HI_Voltage_Integral`
+    - `HI_Voltage_Drop`
 - interpola cada ciclo para uma grade temporal uniforme de `time_steps`;
 - salva o dataset consolidado em `output/processed/battery_health_dataset.csv`.
 
@@ -194,8 +200,10 @@ Regras atuais:
 
 - a seleção é executada sobre o conjunto de desenvolvimento, e dentro de cada fold na cross-validation;
 - features com correlação absoluta abaixo do limiar são descartadas;
-- variáveis base físicas (`Voltage_measured`, `Current_measured`, `Temperature_measured`, `SoC`) são preservadas mesmo quando a correlação é baixa;
-- a lista final é persistida em `output/reports/selected_features.json` e também por fold em `output/models/selected_features_foldN.json`.
+- variáveis base físicas (`Voltage_measured`, `Current_measured`, `Temperature_measured`, `SoC`) são preservadas mesmo
+  quando a correlação é baixa;
+- a lista final é persistida em `output/reports/selected_features.json` e também por fold em
+  `output/models/selected_features_foldN.json`.
 
 ### 4) Famílias de modelos implementadas
 
@@ -236,7 +244,8 @@ Implementados em `models/spiking.py`:
 - `SJ-LSM`
 - `SJ-Spiking-Dilated`
 
-Esses modelos utilizam componentes de `SpikingJelly`, neurônios LIF, atenção spiking e variações com codificação temporal e reservatório esparso.
+Esses modelos utilizam componentes de `SpikingJelly`, neurônios LIF, atenção spiking e variações com codificação
+temporal e reservatório esparso.
 
 ### 5) Fábrica central de modelos
 
@@ -292,11 +301,13 @@ Características do treino:
 
 #### OOD
 
-`ood_val.py` define OOD como baterias classificadas como `Frio` em `BATTERY_DOMAINS` e testa o modelo em um cenário zero-shot no frio (4°C), treinando somente em baterias não frias.
+`ood_val.py` define OOD como baterias classificadas como `Frio` em `BATTERY_DOMAINS` e testa o modelo em um cenário
+zero-shot no frio (4°C), treinando somente em baterias não frias.
 
 ### 8) Quantização pós-treinamento
 
-`quantize.py` usa `torchao` para quantização INT8 do readout dos modelos SNN, preservando o restante da arquitetura em FP32.
+`quantize.py` usa `torchao` para quantização INT8 do readout dos modelos SNN, preservando o restante da arquitetura em
+FP32.
 
 O script:
 
@@ -421,14 +432,14 @@ battery_cycle_summary.csv
 ### Checkpoints
 
 - `output/models/`:
-  - checkpoints por fold;
-  - scalers por fold;
-  - features selecionadas por fold;
-  - modelos quantizados por fold.
+    - checkpoints por fold;
+    - scalers por fold;
+    - features selecionadas por fold;
+    - modelos quantizados por fold.
 - `output/holdout_models/`:
-  - checkpoints finais;
-  - scalers globais;
-  - modelo quantizado final.
+    - checkpoints finais;
+    - scalers globais;
+    - modelo quantizado final.
 
 ### Visualizações
 
@@ -450,7 +461,8 @@ Os gráficos incluem, entre outros:
 
 ## Configuração atual carregada pelo pipeline
 
-Quando `output/reports/best_hyperparameters.json` existe, `PipelineConfig` sobrepõe automaticamente os defaults. O arquivo atualmente armazenado contém:
+Quando `output/reports/best_hyperparameters.json` existe, `PipelineConfig` sobrepõe automaticamente os defaults. O
+arquivo atualmente armazenado contém:
 
 ```json
 {
@@ -475,49 +487,102 @@ Esses valores afetam principalmente as arquiteturas SNN e os Transformers que us
 
 Fonte: `output/reports/cv_summary_results.csv`
 
-| Modelo | MAE médio | RMSE médio | R² médio |
-| --- | ---: | ---: | ---: |
-| `Phys-iTransformer` | 2.5290 | 3.4035 | 0.9458 |
-| `CNN-1D` | 2.9242 | 4.0410 | 0.9210 |
-| `LSTM` | 2.9721 | 3.7880 | 0.9269 |
-| `CNN-DILATED` | 3.2658 | 4.0452 | 0.9082 |
-| `Phys-iTR-Curriculum` | 3.5204 | 4.6636 | 0.8979 |
+| Model                | MAE_Mean           | MAE_Std             | RMSE_Mean          | RMSE_Std           | R2_Mean            | R2_Std               |
+|----------------------|--------------------|---------------------|--------------------|--------------------|--------------------|----------------------|
+| SJ-Spiking-MultiStep | 1.616983562707901  | 0.6924073076781201  | 2.54818205205042   | 1.2635219207908939 | 0.9521012008190155 | 0.04815623849452049  |
+| SJ-Spiking-Attention | 6.101529002189636  | 1.3820106244700259  | 9.548528149454818  | 2.802931555279347  | 0.5207262933254242 | 0.2435336472512857   |
+| SJ-Spiking-Hybrid    | 0.7433111220598221 | 0.19854897855615367 | 1.1942844481687547 | 0.3639163877536839 | 0.990999162197113  | 0.008023389098026865 |
+| SJ-Spiking-Simple    | 4.350496292114258  | 0.6163987555480005  | 5.8319271786379066 | 1.1264020235349341 | 0.8292171061038971 | 0.054461174499731625 |
+| SJ-LSM               | 3.852400481700897  | 1.3276120788361268  | 6.304439756613979  | 2.805934630167577  | 0.810741975903511  | 0.11561039562886874  |
+| SJ-Spiking-Dilated   | 3.6168287992477417 | 2.7796288731930368  | 5.042851766799634  | 3.805007756284634  | 0.7166047692298889 | 0.41995954401689667  |
+| CNN-1D               | 2.318231701850891  | 0.7309136138471009  | 3.127746254490984  | 0.9172056171236489 | 0.954618826508522  | 0.011897336680368025 |
+| LSTM                 | 1.3550152778625488 | 0.5193874933179761  | 2.504996570075149  | 1.280427318966347  | 0.9678324311971664 | 0.023569233119200932 |
+| CNN-LSTM             | 1.173190139234066  | 0.5135234497899555  | 1.9644172255244026 | 0.8990588940801469 | 0.9694717824459076 | 0.03127806497851961  |
+| CNN-DILATED          | 1.8131912052631378 | 0.11146256632615656 | 2.46446946459438   | 0.5205475159085714 | 0.9661346524953842 | 0.019846473528059478 |
+| iTransformer         | 2.804946333169937  | 1.364228368540341   | 4.3019079833305485 | 2.459408548597081  | 0.9059367477893829 | 0.08321902809530626  |
+| DynamicGraph-iTR     | 3.175284743309021  | 1.0882855165187062  | 5.515647546385723  | 2.564763270468345  | 0.8537634611129761 | 0.08631273545543258  |
+| Phys-iTR-Curriculum  | 2.520804703235626  | 1.511880567989537   | 3.831080740790794  | 2.3845552589762717 | 0.9135314524173737 | 0.07503094605034538  |
+| Phys-iTransformer    | 3.1001071333885193 | 0.6741000507165344  | 4.920157197452793  | 1.7035308287971884 | 0.884620800614357  | 0.04786795753692273  |
 
-Leitura prática: na cross-validation atual, o melhor equilíbrio global aparece em `Phys-iTransformer`, enquanto as SNNs apresentam desempenho mais variável entre folds.
+Leitura prática: considerando não apenas o desempenho médio, mas também a estabilidade entre execuções (desvio padrão),
+o modelo SJ-Spiking-Hybrid se destaca como o mais robusto e preciso, apresentando os menores erros e baixíssima
+variância, seguido por CNN-LSTM e LSTM, que mantêm bom equilíbrio entre desempenho e estabilidade. O
+SJ-Spiking-MultiStep, apesar de competitivo no cenário posterior, apresenta maior variabilidade e desempenho médio
+inferior, enquanto modelos como CNN-1D e CNN-DILATED também demonstram boa consistência, porém com erros mais elevados.
+Arquiteturas baseadas em Transformer, como iTransformer e suas variantes físicas, exibem maior variância e desempenho
+inferior neste cenário.
 
 ### Holdout
 
 Fonte: `output/reports/holdout_results.csv`
 
-| Modelo | MAE | RMSE | R² |
-| --- | ---: | ---: | ---: |
-| `CNN-LSTM` | 1.2405 | 1.5919 | 0.9924 |
-| `iTransformer` | 1.2503 | 1.6552 | 0.9918 |
-| `Phys-iTR-Curriculum` | 1.2566 | 1.7246 | 0.9911 |
-| `SJ-Spiking-MultiStep` | 1.5199 | 2.0373 | 0.9876 |
-| `Phys-iTransformer` | 1.8035 | 2.1921 | 0.9856 |
+| Model                | MAE                | RMSE               | R2                 |
+|----------------------|--------------------|--------------------|--------------------|
+| SJ-Spiking-MultiStep | 0.506492555141449  | 0.7531574463878917 | 0.9983037710189819 |
+| SJ-Spiking-Attention | 3.4989659786224365 | 4.535095267004933  | 0.9384979605674744 |
+| SJ-Spiking-Hybrid    | 0.633913516998291  | 0.8339803369500273 | 0.9979201555252075 |
+| SJ-Spiking-Simple    | 3.1526758670806885 | 4.195841210719988  | 0.947355329990387  |
+| SJ-LSM               | 3.4857177734375    | 5.016578654956701  | 0.9247456192970276 |
+| SJ-Spiking-Dilated   | 1.7527374029159546 | 2.3057371691012083 | 0.9841022491455078 |
+| CNN-1D               | 3.8042259216308594 | 4.590738360288784  | 0.9369795322418213 |
+| LSTM                 | 2.0170040130615234 | 2.4188018990402123 | 0.9825048446655273 |
+| CNN-LSTM             | 0.904786229133606  | 1.0667289832409252 | 0.9965972900390625 |
+| CNN-DILATED          | 1.4034277200698853 | 1.8185178234914496 | 0.9901109933853149 |
+| iTransformer         | 1.0432432889938354 | 1.383678402241566  | 0.9942748546600342 |
+| DynamicGraph-iTR     | 2.2503931522369385 | 2.6568156818093636 | 0.9788923859596252 |
+| Phys-iTR-Curriculum  | 1.997101902961731  | 2.2903866632180514 | 0.9843131899833679 |
+| Phys-iTransformer    | 1.172732949256897  | 1.5364774110116133 | 0.9929406046867371 |
 
-Leitura prática: no holdout atual, os melhores resultados são de `CNN-LSTM`, `iTransformer` e `Phys-iTR-Curriculum`, com `SJ-Spiking-MultiStep` ainda competitivo.
+Leitura prática: no holdout atual, os melhores resultados são dominados por arquiteturas spiking, com
+SJ-Spiking-MultiStep como líder absoluto, seguido de SJ-Spiking-Hybrid. Entre os modelos não-spiking, destacam-se
+CNN-LSTM, iTransformer e Phys-iTransformer, que apresentam desempenho consistente, porém inferior aos dois primeiros.
 
 ### OOD no frio
 
 Fonte: `output/reports/ood_results.csv`
 
-| Modelo | MAE | RMSE | R² |
-| --- | ---: | ---: | ---: |
-| `LSTM` | 0.5161 | 0.8593 | 0.9653 |
-| `SJ-Spiking-Dilated` | 1.2096 | 1.5032 | 0.8938 |
-| `Phys-iTransformer` | 3.6169 | 5.1331 | -0.2386 |
-| `SJ-Spiking-MultiStep` | 3.0168 | 4.3090 | 0.1272 |
-| `SJ-Spiking-Simple` | 3.6311 | 4.6774 | -0.0284 |
+| Model                | MAE                | RMSE               | R2                  |
+|----------------------|--------------------|--------------------|---------------------|
+| SJ-Spiking-MultiStep | 7.190062046051025  | 8.419465861651071  | 0.5944579839706421  |
+| SJ-Spiking-Attention | 14.886226654052734 | 18.098394400686832 | -0.8739020824432373 |
+| SJ-Spiking-Hybrid    | 3.6540751457214355 | 4.380855456557543  | 0.8902044892311096  |
+| SJ-Spiking-Simple    | 13.477045059204102 | 17.344153817089474 | -0.7209689617156982 |
+| SJ-LSM               | 20.130861282348633 | 25.02577162857259  | -2.582958459854126  |
+| SJ-Spiking-Dilated   | 3.7504353523254395 | 4.191732744084139  | 0.8994796276092529  |
+| CNN-1D               | 8.940195083618164  | 11.102936543551742 | 0.2947508692741394  |
+| LSTM                 | 3.210638999938965  | 4.094364498697369  | 0.9040952920913696  |
+| CNN-LSTM             | 14.086286544799805 | 17.39502467790494  | -0.7310791015625    |
+| CNN-DILATED          | 8.154223442077637  | 10.244809208699607 | 0.39955317974090576 |
+| iTransformer         | 13.77912712097168  | 19.900066954533642 | -1.265561819076538  |
+| DynamicGraph-iTR     | 21.79416847229004  | 25.496563848220926 | -2.719033718109131  |
+| Phys-iTR-Curriculum  | 15.042778968811035 | 20.924119004238044 | -1.5047316551208496 |
+| Phys-iTransformer    | 14.912175178527832 | 20.069401679897247 | -1.3042821884155273 |
 
-Leitura prática: o cenário OOD revela uma queda forte de generalização para vários modelos; entre os artefatos atuais, `LSTM` é o mais robusto no conjunto frio.
+Leitura prática: sob condições fora da distribuição (out-of-distribution), há uma mudança significativa no ranking, com
+forte degradação de vários modelos — especialmente arquiteturas mais complexas e baseadas em Transformer. Os melhores
+resultados passam a ser liderados por modelos com maior capacidade de generalização:
+
+LSTM apresenta o melhor desempenho geral, com o menor MAE/RMSE e o maior R² (0.904), indicando maior robustez fora da
+distribuição.
+SJ-Spiking-Dilated e SJ-Spiking-Hybrid aparecem logo em seguida, com desempenho muito próximo e R² elevado (~0.89–0.90),
+mostrando boa capacidade de generalização entre os modelos spiking.
+SJ-Spiking-MultiStep, que era dominante in-distribution, sofre queda significativa (R² ≈ 0.59), evidenciando
+sensibilidade a shift de distribuição.
+Modelos como CNN-1D e CNN-DILATED mantêm desempenho intermediário, mas com perda relevante de precisão.
+Arquiteturas como CNN-LSTM, iTransformer e variantes físicas apresentam colapso de generalização (R² negativo),
+indicando falha em capturar padrões transferíveis para o domínio ODD.
+
+Conclusão direta: em cenário ODD, modelos mais simples ou com vieses temporais mais diretos (como LSTM) e algumas
+variantes spiking específicas (Hybrid/Dilated) são significativamente mais robustos do que arquiteturas mais
+sofisticadas ou altamente especializadas.
 
 ### Quantização
 
 Fonte: `output/reports/quantization_results.csv`
 
-O relatório atual cobre apenas modelos SNN e compara FP32 vs INT8 no holdout e nos folds de cross-validation. O pipeline de quantização quantiza somente o readout, o que explica a redução de tamanho modesta, mas com preservação parcial da dinâmica interna.
+O relatório atual cobre apenas modelos SNN e compara FP32 vs INT8 no holdout e nos folds de cross-validation. O pipeline
+de quantização quantiza somente o readout, o que explica a redução de tamanho modesta, mas com preservação parcial da
+dinâmica interna.
 
 ---
 
@@ -530,19 +595,23 @@ O relatório atual cobre apenas modelos SNN e compara FP32 vs INT8 no holdout e 
 
 ### 2) Seleção de features e tamanho da janela
 
-O pipeline filtra ciclos que não possuem exatamente `time_steps` amostras após a interpolação. Isso simplifica o formato de entrada, mas pode descartar ciclos válidos com comprimentos diferentes.
+O pipeline filtra ciclos que não possuem exatamente `time_steps` amostras após a interpolação. Isso simplifica o formato
+de entrada, mas pode descartar ciclos válidos com comprimentos diferentes.
 
 ### 3) OOD restrito a baterias frias
 
-O experimento fora de domínio atual é específico para o domínio `Frio`. Ele é útil para stress test, mas não cobre todos os cenários possíveis de mudança de distribuição.
+O experimento fora de domínio atual é específico para o domínio `Frio`. Ele é útil para stress test, mas não cobre todos
+os cenários possíveis de mudança de distribuição.
 
 ### 4) Quantização parcial
 
-A quantização não cobre as camadas recorrentes/atencionais internas; ela atua apenas no readout dos modelos SNN. Isso é consistente com a intenção de preservar desempenho, mas limita a compressão total.
+A quantização não cobre as camadas recorrentes/atencionais internas; ela atua apenas no readout dos modelos SNN. Isso é
+consistente com a intenção de preservar desempenho, mas limita a compressão total.
 
 ### 5) Hiperparâmetros e resultados podem mudar
 
-Os relatórios em `output/reports/` são artefatos gerados. Se o pipeline for reexecutado com outra semente, outro dataset ou novos hiperparâmetros, os números podem mudar.
+Os relatórios em `output/reports/` são artefatos gerados. Se o pipeline for reexecutado com outra semente, outro dataset
+ou novos hiperparâmetros, os números podem mudar.
 
 ---
 
@@ -605,7 +674,10 @@ Para reproduzir um experimento específico, mantenha:
 
 ## Estado do projeto
 
-O repositório está funcional como um pipeline experimental modular. Os componentes centrais de ingestão, treino, avaliação, visualização e quantização existem e estão integrados, mas a documentação precisa acompanhar cuidadosamente os artefatos gerados, pois alguns scripts operam sobre conjuntos específicos de modelos e algumas dependências ainda não estão completamente formalizadas no `pyproject.toml`.
+O repositório está funcional como um pipeline experimental modular. Os componentes centrais de ingestão, treino,
+avaliação, visualização e quantização existem e estão integrados, mas a documentação precisa acompanhar cuidadosamente
+os artefatos gerados, pois alguns scripts operam sobre conjuntos específicos de modelos e algumas dependências ainda não
+estão completamente formalizadas no `pyproject.toml`.
 
 ---
 
