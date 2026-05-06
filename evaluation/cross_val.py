@@ -53,7 +53,6 @@ def run_cross_validation(X, y, groups, config):
             y_dev=y_train,
             feature_names=config.features,
             threshold=config.hi_correlation_threshold,
-            method='spearman'
         )
         fold_selected_features[current_fold] = selected_names
         logger.info(f"   Features selecionadas no fold {current_fold}: {selected_names}")
@@ -69,9 +68,9 @@ def run_cross_validation(X, y, groups, config):
         train_domains = [config.BATTERY_DOMAINS.get(b, '?') for b in np.unique(grp_tv[train_idx])]
         val_domains   = [config.BATTERY_DOMAINS.get(b, '?') for b in np.unique(grp_tv[val_idx])]
         test_domains  = [config.BATTERY_DOMAINS.get(b, '?') for b in np.unique(groups[test_idx])]
-        logger.info(f"   Domínios Treino : {sorted(train_domains)}")
-        logger.info(f"   Domínios Val    : {sorted(val_domains)}")
-        logger.info(f"   Domínios Teste  : {sorted(test_domains)}")
+        # logger.info(f"   Domínios Treino : {sorted(train_domains)}")
+        # logger.info(f"   Domínios Val    : {sorted(val_domains)}")
+        # logger.info(f"   Domínios Teste  : {sorted(test_domains)}")
         # ─────────────────────────────────────────────────────────────────────
 
         scaler_x = StandardScaler()
