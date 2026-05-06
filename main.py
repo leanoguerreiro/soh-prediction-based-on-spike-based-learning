@@ -18,7 +18,7 @@ from visualization.plots import generate_all_plots, plot_loss_curves, generate_h
 
 def main():
     # 1. Inicialização e Configuração
-    config = PipelineConfig(input_dir='./input/synthetic_smartphones')
+    config = PipelineConfig()
     set_seed(config.seed)
     logger = setup_logger()
 
