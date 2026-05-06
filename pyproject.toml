@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "altair>=6.1.0",
     "ipykernel>=7.2.0",
+    "joblib>=1.5.3",
     "matplotlib>=3.10.8",
     "numpy>=2.4.4",
     "optuna>=4.8.0",
@@ -14,6 +15,7 @@ dependencies = [
     "polars>=1.40.1",
     "pyarrow>=24.0.0",
     "scikit-learn>=1.8.0",
+    "scipy>=1.17.1",
     "seaborn>=0.13.2",
     "snntorch>=0.9.4",
     "spikingjelly>=0.0.0.0.14",
