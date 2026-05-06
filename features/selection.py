@@ -4,7 +4,7 @@ import polars as pl
 
 logger = logging.getLogger("BatteryPipeline")
 
-def select_best_features(X_dev, y_dev, feature_names, threshold=0.60, method='spearman'):
+def select_best_features(X_dev, y_dev, feature_names, threshold=0.60, method='pearson'):
     """
     Avalia a correlação de cada feature com o Target (SoH) usando Polars.
     X_dev shape esperado: [Batch, Time, Features]
