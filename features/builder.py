@@ -13,25 +13,21 @@ def build_sequences(df, config):
     if isinstance(df, pd.DataFrame):
         df = pl.from_pandas(df)
 
-    features = list(config.features)
+    leakage_features = ["Capacity_Ah", "Energy_Wh", "Delta_Q"]
+    features_input = [f for f in config.features if f not in leakage_features]
 
-    # 2. Agrupamento ultra-rápido em C/Rust.
-    # O maintain_order=True é CRUCIAL para garantir que a linha do tempo (Time) não fica baralhada
     agg_df = df.group_by(["battery_id", "cycle_number"], maintain_order=True).agg([
         pl.len().alias("count"),
         pl.col("SoH").first().alias("SoH"),
-        *[pl.col(f) for f in features]
+        pl.col("Capacity_Ah").first().alias("Capacity_Ah") if "Capacity_Ah" in df.columns else None,
+        *[pl.col(f) for f in features_input]
     ]).filter(pl.col("count") == config.time_steps)
 
-    # 3. Construção Vetorizada do Tensor 3D (Batch, Time, Features)
-    # agg_df[f].to_list() devolve as sequências temporais;
-    # np.vstack converte as listas num array 2D;
-    # np.stack(..., axis=-1) sobrepõe as features formando a 3ª dimensão.
+    # 2. Constrói a Matriz X apenas com sensores e HIs térmicos/temporais
     X_seq = np.stack([
         np.vstack(agg_df[f].to_list())
-        for f in features], axis=-1).astype(np.float32)
+        for f in features_input], axis=-1).astype(np.float32)
 
-    # 4. Extração simples das variáveis alvo (Target)
     y = agg_df["SoH"].to_numpy().astype(np.float32)
     groups = agg_df["battery_id"].to_numpy()
 
