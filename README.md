@@ -175,6 +175,12 @@ O processamento atual faz o seguinte:
     - `HI_Mean_Temp`
     - `HI_Voltage_Integral`
     - `HI_Voltage_Drop`
+    - `HI_Thermal_Integral`
+    - `HI_Temp_Rate`
+    - `HI_Voltage_Efficiency`
+    - `HI_Time_to_Max_Temp`
+    - `HI_Final_Voltage`
+    - `HI_Internal_Resistance`
 - interpola cada ciclo para uma grade temporal uniforme de `time_steps`;
 - salva o dataset consolidado em `output/processed/battery_health_dataset.csv`.
 
@@ -487,30 +493,35 @@ Esses valores afetam principalmente as arquiteturas SNN e os Transformers que us
 
 Fonte: `output/reports/cv_summary_results.csv`
 
-| Model                | MAE_Mean           | MAE_Std             | RMSE_Mean          | RMSE_Std           | R2_Mean            | R2_Std               |
-|----------------------|--------------------|---------------------|--------------------|--------------------|--------------------|----------------------|
-| SJ-Spiking-MultiStep | 1.616983562707901  | 0.6924073076781201  | 2.54818205205042   | 1.2635219207908939 | 0.9521012008190155 | 0.04815623849452049  |
-| SJ-Spiking-Attention | 6.101529002189636  | 1.3820106244700259  | 9.548528149454818  | 2.802931555279347  | 0.5207262933254242 | 0.2435336472512857   |
-| SJ-Spiking-Hybrid    | 0.7433111220598221 | 0.19854897855615367 | 1.1942844481687547 | 0.3639163877536839 | 0.990999162197113  | 0.008023389098026865 |
-| SJ-Spiking-Simple    | 4.350496292114258  | 0.6163987555480005  | 5.8319271786379066 | 1.1264020235349341 | 0.8292171061038971 | 0.054461174499731625 |
-| SJ-LSM               | 3.852400481700897  | 1.3276120788361268  | 6.304439756613979  | 2.805934630167577  | 0.810741975903511  | 0.11561039562886874  |
-| SJ-Spiking-Dilated   | 3.6168287992477417 | 2.7796288731930368  | 5.042851766799634  | 3.805007756284634  | 0.7166047692298889 | 0.41995954401689667  |
-| CNN-1D               | 2.318231701850891  | 0.7309136138471009  | 3.127746254490984  | 0.9172056171236489 | 0.954618826508522  | 0.011897336680368025 |
-| LSTM                 | 1.3550152778625488 | 0.5193874933179761  | 2.504996570075149  | 1.280427318966347  | 0.9678324311971664 | 0.023569233119200932 |
-| CNN-LSTM             | 1.173190139234066  | 0.5135234497899555  | 1.9644172255244026 | 0.8990588940801469 | 0.9694717824459076 | 0.03127806497851961  |
-| CNN-DILATED          | 1.8131912052631378 | 0.11146256632615656 | 2.46446946459438   | 0.5205475159085714 | 0.9661346524953842 | 0.019846473528059478 |
-| iTransformer         | 2.804946333169937  | 1.364228368540341   | 4.3019079833305485 | 2.459408548597081  | 0.9059367477893829 | 0.08321902809530626  |
-| DynamicGraph-iTR     | 3.175284743309021  | 1.0882855165187062  | 5.515647546385723  | 2.564763270468345  | 0.8537634611129761 | 0.08631273545543258  |
-| Phys-iTR-Curriculum  | 2.520804703235626  | 1.511880567989537   | 3.831080740790794  | 2.3845552589762717 | 0.9135314524173737 | 0.07503094605034538  |
-| Phys-iTransformer    | 3.1001071333885193 | 0.6741000507165344  | 4.920157197452793  | 1.7035308287971884 | 0.884620800614357  | 0.04786795753692273  |
+| Model                | MAE_Mean           | MAE_Std             | RMSE_Mean          | RMSE_Std           | R2_Mean            | R2_Std                |
+|----------------------|--------------------|---------------------|--------------------|--------------------|--------------------|-----------------------|
+| SJ-Spiking-MultiStep | 1.465942144393921  | 0.5369203550381392  | 2.163338935490973  | 0.7093067139927979 | 0.9706299304962158 | 0.02443097050354622   |
+| SJ-Spiking-Attention | 4.07724928855896   | 0.4537730827921739  | 6.458553823747127  | 1.1933924696054048 | 0.7621074765920639 | 0.15691747275857745   |
+| SJ-Spiking-Hybrid    | 1.4525528997182846 | 0.6618262364492865  | 2.236924739261464  | 1.1282805284789112 | 0.9564872980117798 | 0.05406528554920556   |
+| SJ-Spiking-Simple    | 3.6086349487304688 | 0.8407053453822877  | 4.729248593051048  | 1.0358850851026529 | 0.868026003241539  | 0.0965238470887006    |
+| SJ-LSM               | 4.221303939819336  | 1.5993104539236225  | 6.709421728024378  | 3.387508397580054  | 0.77812559902668   | 0.16628883049899612   |
+| SJ-Spiking-Dilated   | 1.4388587176799774 | 0.2888846304400355  | 1.6885702011452628 | 0.3171314522400927 | 0.9851776361465454 | 0.007003845539043493  |
+| CNN-1D               | 1.9004437625408173 | 0.5203177559742033  | 2.5943318851863193 | 0.7490693835308017 | 0.9686937481164932 | 0.00833698352583511   |
+| LSTM                 | 1.235514760017395  | 0.33478181161473497 | 1.8553799252486276 | 0.4820963591830097 | 0.9839676916599274 | 0.0030571456343277373 |
+| CNN-LSTM             | 1.3935880959033966 | 0.3162505355635853  | 2.5831274732093283 | 0.4907081778509408 | 0.9659289419651031 | 0.012973002952087838  |
+| CNN-DILATED          | 1.7806618809700012 | 0.6188159018049607  | 3.0959197428156635 | 1.440490393079668  | 0.9302978366613388 | 0.06416996509241359   |
+| iTransformer         | 3.23615962266922   | 0.6598160728411796  | 5.559500549349493  | 1.2808455342908713 | 0.832585945725441  | 0.0911671923695662    |
+| DynamicGraph-iTR     | 3.0377995669841766 | 1.029995819024492   | 4.9917527292636255 | 2.303942534505184  | 0.8576802760362625 | 0.1022477234454821    |
+| Phys-iTR-Curriculum  | 2.692037045955658  | 0.9523926064620195  | 3.3899660599832067 | 1.023273502862967  | 0.9253071695566177 | 0.05371692492142196   |
+| Phys-iTransformer    | 3.4666662514209747 | 1.0651397001507503  | 5.059782740170305  | 1.643890821262946  | 0.863190159201622  | 0.061473529145225324  |
 
-Leitura prática: considerando não apenas o desempenho médio, mas também a estabilidade entre execuções (desvio padrão),
-o modelo SJ-Spiking-Hybrid se destaca como o mais robusto e preciso, apresentando os menores erros e baixíssima
-variância, seguido por CNN-LSTM e LSTM, que mantêm bom equilíbrio entre desempenho e estabilidade. O
-SJ-Spiking-MultiStep, apesar de competitivo no cenário posterior, apresenta maior variabilidade e desempenho médio
-inferior, enquanto modelos como CNN-1D e CNN-DILATED também demonstram boa consistência, porém com erros mais elevados.
-Arquiteturas baseadas em Transformer, como iTransformer e suas variantes físicas, exibem maior variância e desempenho
-inferior neste cenário.
+Leitura prática: ao considerar simultaneamente desempenho médio e estabilidade (desvio padrão), observa-se uma mudança
+relevante no ranking. O modelo SJ-Spiking-Dilated passa a apresentar o melhor equilíbrio entre precisão e consistência,
+com baixa variabilidade entre execuções e alto poder explicativo. Em seguida, o LSTM se destaca como o modelo mais
+estável estatisticamente, mantendo erros baixos e variância mínima.
+
+Modelos como SJ-Spiking-MultiStep e SJ-Spiking-Hybrid permanecem competitivos em termos de desempenho médio, porém
+apresentam maior sensibilidade às partições dos dados, refletida em desvios padrão mais elevados. Arquiteturas como
+CNN-1D e CNN-LSTM continuam sendo alternativas sólidas, com desempenho consistente, embora inferiores aos melhores
+casos.
+
+Por outro lado, modelos baseados em Transformer (como iTransformer e suas variações) mantêm desempenho inferior e maior
+variabilidade, indicando menor robustez no cenário de validação cruzada.
 
 ### Holdout
 
@@ -518,24 +529,31 @@ Fonte: `output/reports/holdout_results.csv`
 
 | Model                | MAE                | RMSE               | R2                 |
 |----------------------|--------------------|--------------------|--------------------|
-| SJ-Spiking-MultiStep | 0.506492555141449  | 0.7531574463878917 | 0.9983037710189819 |
-| SJ-Spiking-Attention | 3.4989659786224365 | 4.535095267004933  | 0.9384979605674744 |
-| SJ-Spiking-Hybrid    | 0.633913516998291  | 0.8339803369500273 | 0.9979201555252075 |
-| SJ-Spiking-Simple    | 3.1526758670806885 | 4.195841210719988  | 0.947355329990387  |
-| SJ-LSM               | 3.4857177734375    | 5.016578654956701  | 0.9247456192970276 |
-| SJ-Spiking-Dilated   | 1.7527374029159546 | 2.3057371691012083 | 0.9841022491455078 |
-| CNN-1D               | 3.8042259216308594 | 4.590738360288784  | 0.9369795322418213 |
-| LSTM                 | 2.0170040130615234 | 2.4188018990402123 | 0.9825048446655273 |
-| CNN-LSTM             | 0.904786229133606  | 1.0667289832409252 | 0.9965972900390625 |
-| CNN-DILATED          | 1.4034277200698853 | 1.8185178234914496 | 0.9901109933853149 |
-| iTransformer         | 1.0432432889938354 | 1.383678402241566  | 0.9942748546600342 |
-| DynamicGraph-iTR     | 2.2503931522369385 | 2.6568156818093636 | 0.9788923859596252 |
-| Phys-iTR-Curriculum  | 1.997101902961731  | 2.2903866632180514 | 0.9843131899833679 |
-| Phys-iTransformer    | 1.172732949256897  | 1.5364774110116133 | 0.9929406046867371 |
+| SJ-Spiking-MultiStep | 0.9997504353523254 | 1.4047568553398153 | 0.9940990805625916 |
+| SJ-Spiking-Attention | 1.8903720378875732 | 2.435030737962915  | 0.9822693467140198 |
+| SJ-Spiking-Hybrid    | 1.069430947303772  | 1.3643888330042313 | 0.9944333434104919 |
+| SJ-Spiking-Simple    | 2.113936424255371  | 2.696830079023922  | 0.9782517552375793 |
+| SJ-LSM               | 3.004192590713501  | 3.9537661790109713 | 0.9532546401023865 |
+| SJ-Spiking-Dilated   | 1.5758343935012817 | 1.8753516821064762 | 0.9894832372665405 |
+| CNN-1D               | 1.6323901414871216 | 2.0121755729424895 | 0.9878926873207092 |
+| LSTM                 | 1.635323405265808  | 1.952881271413766  | 0.988595724105835  |
+| CNN-LSTM             | 0.9930282831192017 | 1.2396463276646956 | 0.9954047203063965 |
+| CNN-DILATED          | 2.0072572231292725 | 2.5607513415932597 | 0.9803912043571472 |
+| iTransformer         | 2.4356911182403564 | 3.0239607483874664 | 0.9726555943489075 |
+| DynamicGraph-iTR     | 4.453719615936279  | 5.576516141134971  | 0.9070086479187012 |
+| Phys-iTR-Curriculum  | 2.8703033924102783 | 3.7585344473633073 | 0.9577571153640747 |
+| Phys-iTransformer    | 4.227468013763428  | 5.442152115966652  | 0.9114358425140381 |
 
-Leitura prática: no holdout atual, os melhores resultados são dominados por arquiteturas spiking, com
-SJ-Spiking-MultiStep como líder absoluto, seguido de SJ-Spiking-Hybrid. Entre os modelos não-spiking, destacam-se
-CNN-LSTM, iTransformer e Phys-iTransformer, que apresentam desempenho consistente, porém inferior aos dois primeiros.
+Leitura prática: no cenário holdout (in-distribution), o desempenho geral é elevado para a maioria dos modelos, com
+diferenças mais sutis entre os melhores. O modelo CNN-LSTM apresenta o melhor resultado global, alcançando o menor erro
+e maior capacidade explicativa.
+
+As arquiteturas spiking SJ-Spiking-MultiStep e SJ-Spiking-Hybrid aparecem logo em seguida, com desempenho muito próximo
+e altamente competitivo. Modelos como LSTM e CNN-1D mantêm desempenho sólido e consistente, configurando bons baselines.
+
+Já SJ-Spiking-Dilated, embora robusto em validação cruzada, apresenta desempenho ligeiramente inferior neste cenário
+específico. Modelos baseados em Transformer continuam apresentando resultados inferiores em comparação às demais
+abordagens.
 
 ### OOD no frio
 
@@ -543,38 +561,37 @@ Fonte: `output/reports/ood_results.csv`
 
 | Model                | MAE                | RMSE               | R2                  |
 |----------------------|--------------------|--------------------|---------------------|
-| SJ-Spiking-MultiStep | 7.190062046051025  | 8.419465861651071  | 0.5944579839706421  |
-| SJ-Spiking-Attention | 14.886226654052734 | 18.098394400686832 | -0.8739020824432373 |
-| SJ-Spiking-Hybrid    | 3.6540751457214355 | 4.380855456557543  | 0.8902044892311096  |
-| SJ-Spiking-Simple    | 13.477045059204102 | 17.344153817089474 | -0.7209689617156982 |
-| SJ-LSM               | 20.130861282348633 | 25.02577162857259  | -2.582958459854126  |
-| SJ-Spiking-Dilated   | 3.7504353523254395 | 4.191732744084139  | 0.8994796276092529  |
-| CNN-1D               | 8.940195083618164  | 11.102936543551742 | 0.2947508692741394  |
-| LSTM                 | 3.210638999938965  | 4.094364498697369  | 0.9040952920913696  |
-| CNN-LSTM             | 14.086286544799805 | 17.39502467790494  | -0.7310791015625    |
-| CNN-DILATED          | 8.154223442077637  | 10.244809208699607 | 0.39955317974090576 |
-| iTransformer         | 13.77912712097168  | 19.900066954533642 | -1.265561819076538  |
-| DynamicGraph-iTR     | 21.79416847229004  | 25.496563848220926 | -2.719033718109131  |
-| Phys-iTR-Curriculum  | 15.042778968811035 | 20.924119004238044 | -1.5047316551208496 |
-| Phys-iTransformer    | 14.912175178527832 | 20.069401679897247 | -1.3042821884155273 |
+| SJ-Spiking-MultiStep | 5.155243396759033  | 7.299657254468516  | 0.6951601505279541  |
+| SJ-Spiking-Attention | 8.167725563049316  | 9.540021418581416  | 0.47932642698287964 |
+| SJ-Spiking-Hybrid    | 4.8495049476623535 | 6.605055820364936  | 0.750414252281189   |
+| SJ-Spiking-Simple    | 29.50758934020996  | 39.06168280395204  | -7.7290849685668945 |
+| SJ-LSM               | 23.515832901000977 | 26.384731431916737 | -2.9826505184173584 |
+| SJ-Spiking-Dilated   | 10.465200424194336 | 12.387000844312242 | 0.12219280004501343 |
+| CNN-1D               | 14.409918785095215 | 16.405563601712796 | -0.5397460460662842 |
+| LSTM                 | 19.047870635986328 | 24.731806069216063 | -2.4992783069610596 |
+| CNN-LSTM             | 9.19282054901123   | 12.695579925067978 | 0.07791298627853394 |
+| CNN-DILATED          | 14.41483211517334  | 16.573523196429242 | -0.5714352130889893 |
+| iTransformer         | 15.971542358398438 | 21.741920110420114 | -1.7043483257293701 |
+| DynamicGraph-iTR     | 17.27630043029785  | 19.246987639709364 | -1.1192996501922607 |
+| Phys-iTR-Curriculum  | 13.271665573120117 | 18.188251702678848 | -0.8925559520721436 |
+| Phys-iTransformer    | 19.626596450805664 | 23.051413747994935 | -2.0399186611175537 |
 
-Leitura prática: sob condições fora da distribuição (out-of-distribution), há uma mudança significativa no ranking, com
-forte degradação de vários modelos — especialmente arquiteturas mais complexas e baseadas em Transformer. Os melhores
-resultados passam a ser liderados por modelos com maior capacidade de generalização:
+Leitura prática: sob condições fora da distribuição (out-of-distribution), ocorre uma degradação significativa e
+generalizada no desempenho dos modelos, com mudanças expressivas no ranking. Nesse cenário, as arquiteturas spiking mais
+estruturadas passam a dominar.
 
-LSTM apresenta o melhor desempenho geral, com o menor MAE/RMSE e o maior R² (0.904), indicando maior robustez fora da
-distribuição.
-SJ-Spiking-Dilated e SJ-Spiking-Hybrid aparecem logo em seguida, com desempenho muito próximo e R² elevado (~0.89–0.90),
-mostrando boa capacidade de generalização entre os modelos spiking.
-SJ-Spiking-MultiStep, que era dominante in-distribution, sofre queda significativa (R² ≈ 0.59), evidenciando
-sensibilidade a shift de distribuição.
-Modelos como CNN-1D e CNN-DILATED mantêm desempenho intermediário, mas com perda relevante de precisão.
-Arquiteturas como CNN-LSTM, iTransformer e variantes físicas apresentam colapso de generalização (R² negativo),
-indicando falha em capturar padrões transferíveis para o domínio ODD.
+O modelo SJ-Spiking-Hybrid apresenta o melhor desempenho geral, seguido por SJ-Spiking-MultiStep, ambos demonstrando
+maior capacidade de generalização sob distribuição deslocada. O modelo SJ-Spiking-Attention ainda mantém desempenho
+utilizável, embora com erro elevado.
 
-Conclusão direta: em cenário ODD, modelos mais simples ou com vieses temporais mais diretos (como LSTM) e algumas
-variantes spiking específicas (Hybrid/Dilated) são significativamente mais robustos do que arquiteturas mais
-sofisticadas ou altamente especializadas.
+A partir desses, observa-se uma queda acentuada: modelos como SJ-Spiking-Dilated e CNN-LSTM apresentam baixo poder
+explicativo, enquanto LSTM, CNN-1D, CNN-DILATED e arquiteturas baseadas em Transformer exibem colapso de generalização,
+frequentemente com R² negativo. Casos mais simples, como SJ-Spiking-Simple e SJ-LSM, apresentam degradação severa,
+indicando incapacidade de adaptação ao novo domínio.
+
+Conclusão direta: no cenário OOD, modelos com viés estrutural mais forte e regularização implícita (como as arquiteturas
+spiking Hybrid e MultiStep) demonstram maior robustez, enquanto modelos mais complexos ou altamente ajustados ao domínio
+de treino tendem a falhar na generalização.
 
 ### Quantização
 
