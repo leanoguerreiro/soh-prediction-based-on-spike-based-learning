@@ -37,7 +37,15 @@ class PipelineConfig:
         'HI_Time_of_Discharge',
         'HI_Max_Temp',
         'HI_Voltage_Integral',
-        'HI_Voltage_Drop'
+        'HI_Voltage_Drop',
+        'HI_Temp_Delta',
+        'HI_Mean_Temp',
+        'HI_Thermal_Integral',
+        'HI_Temp_Rate',
+        'HI_Voltage_Efficiency',
+        'HI_Time_to_Max_Temp',
+        'HI_Final_Voltage',
+        'HI_Internal_Resistance'
     )
     excluded_batteries: tuple = ('B0049', 'B0050', 'B0051', 'B0052')
 
