@@ -53,8 +53,7 @@ def main():
         X_dev=X_dev,
         y_dev=y_dev,
         feature_names=config.features,
-        threshold=config.hi_correlation_threshold,  # vem do PipelineConfig, não hardcoded
-        method='spearman'
+        threshold=config.hi_correlation_threshold,
     )
     config.features = selected_features  # atualiza features na config
 
